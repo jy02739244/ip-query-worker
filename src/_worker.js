@@ -49,6 +49,31 @@ export default {
       });
     }
 
+    // 处理 favicon 请求（供 Google Favicon API 等外部服务抓取）
+    if (url.pathname === '/favicon.ico' || url.pathname === '/favicon.png') {
+      // 32x32 PNG 格式图标（Google Favicon API 不支持 SVG，需要光栅格式）
+      const pngBase64 = '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';
+      const pngBuffer = Uint8Array.from(atob(pngBase64), c => c.charCodeAt(0));
+      return new Response(pngBuffer, {
+        headers: {
+          'content-type': 'image/png',
+          'Cache-Control': 'public, max-age=86400',
+          ...SECURITY_HEADERS,
+        },
+      });
+    }
+
+    if (url.pathname === '/favicon.svg') {
+      const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>`;
+      return new Response(svgIcon, {
+        headers: {
+          'content-type': 'image/svg+xml',
+          'Cache-Control': 'public, max-age=86400',
+          ...SECURITY_HEADERS,
+        },
+      });
+    }
+
     // 处理 API 中转请求
     if (url.pathname === '/api/ipapi') {
       const ip = url.searchParams.get('q');
@@ -131,7 +156,9 @@ function renderHtml(initData) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>IP 哨兵 - 网络身份分析</title>
     <meta name="description" content="IP 哨兵 - 多源 IP 情报分析工具，检测代理/VPN 泄漏，评估 IP 风险等级，支持 Cloudflare、ChatGPT、X.com 等多个节点对比" />
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%234f46e5' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z'/%3E%3Cpath d='m9 12 2 2 4-4'/%3E%3C/svg%3E" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
+    <link rel="alternate icon" href="/favicon.ico" />
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
