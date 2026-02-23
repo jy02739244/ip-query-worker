@@ -173,10 +173,10 @@ function renderHtml(initData) {
       window.CF_DATA = ${safeJsonStringify(initData)};
 
       tailwind.config = {
+        darkMode: 'class',
         theme: {
           extend: {
             fontFamily: {
-              // 使用对中文友好的系统字体栈，移除 Google Fonts 依赖
               sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"Helvetica Neue"', 'Arial', '"PingFang SC"', '"Hiragino Sans GB"', '"Microsoft YaHei"', 'sans-serif'],
               mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', '"Liberation Mono"', '"Courier New"', 'monospace'],
             },
@@ -198,14 +198,26 @@ function renderHtml(initData) {
         },
       }
     </script>
+    <script>
+      // 主题初始化：在页面渲染前应用主题，防止闪烁
+      (function() {
+        var theme = localStorage.getItem('theme');
+        if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
     <style>
       body { background-color: #f8fafc; }
+      .dark body, html.dark body { background-color: #0f172a; }
       .scrollbar-hide::-webkit-scrollbar { display: none; }
       .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
       ::-webkit-scrollbar { width: 8px; height: 8px; }
       ::-webkit-scrollbar-track { background: transparent; }
       ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
       ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+      .dark ::-webkit-scrollbar-thumb { background: #475569; }
+      .dark ::-webkit-scrollbar-thumb:hover { background: #64748b; }
     </style>
   </head>
   <body>
@@ -220,6 +232,10 @@ function renderHtml(initData) {
       const ShieldCheck = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></svg>;
       const Github = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"></path><path d="M9 18c-4.51 2-5-2-7-2"></path></svg>;
       const Globe = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path><path d="M2 12h20"></path></svg>;
+      // 太阳图标（白天模式）
+      const Sun = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>;
+      // 月亮图标（夜间模式）
+      const Moon = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>;
 
       const RefreshCcw = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 2v6h6"></path><path d="M21 12A9 9 0 0 0 6 5.3L3 8"></path><path d="M21 22v-6h-6"></path><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"></path></svg>;
       const ExternalLink = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>;
@@ -358,18 +374,46 @@ function renderHtml(initData) {
         }
       };
 
+      // --- 主题切换组件 ---
+      const ThemeToggle = () => {
+        const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains('dark'));
+
+        const toggleTheme = useCallback(() => {
+          const newDark = !isDark;
+          setIsDark(newDark);
+          if (newDark) {
+            document.documentElement.classList.add('dark');
+            localStorage.setItem('theme', 'dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+            localStorage.setItem('theme', 'light');
+          }
+        }, [isDark]);
+
+        return (
+          <button
+            onClick={toggleTheme}
+            className="p-2 rounded-lg text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all duration-200"
+            aria-label={isDark ? '切换到白天模式' : '切换到夜间模式'}
+            title={isDark ? '切换到白天模式' : '切换到夜间模式'}
+          >
+            {isDark ? <Sun /> : <Moon />}
+          </button>
+        );
+      };
+
       // --- 组件 ---
       const SectionTitle = ({ icon: Icon, title }) => (
-        <div className="flex items-center gap-2 mb-3 text-slate-800 pb-2 border-b border-slate-100">
-            <Icon className="w-5 h-5 text-indigo-600" />
+        <div className="flex items-center gap-2 mb-3 text-slate-800 dark:text-slate-200 pb-2 border-b border-slate-100 dark:border-slate-700">
+            <Icon className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
             <h3 className="font-bold text-base">{title}</h3>
         </div>
       );
 
       const InfoItem = ({ label, value, highlight = false }) => (
         <div className="flex flex-col sm:flex-row justify-between py-2">
-          <span className="text-slate-500 text-sm font-medium min-w-[120px]">{label}</span>
-          <span className={\`text-sm sm:text-right mt-1 sm:mt-0 break-words \${highlight ? 'font-bold text-slate-900' : 'text-slate-700'}\`}>
+          <span className="text-slate-500 dark:text-slate-400 text-sm font-medium min-w-[120px]">{label}</span>
+          <span className={\`text-sm sm:text-right mt-1 sm:mt-0 break-words \${highlight ? 'font-bold text-slate-900 dark:text-slate-100' : 'text-slate-700 dark:text-slate-300'}\`}>
             {value}
           </span>
         </div>
@@ -429,9 +473,9 @@ function renderHtml(initData) {
               <div className="bg-red-50 p-4 rounded-full mb-4">
                   <AlertTriangle className="w-8 h-8 text-red-500" />
               </div>
-              <h3 className="text-lg font-bold text-slate-800">获取详情失败</h3>
-              <p className="text-slate-500 mt-2 max-w-xs">{error}</p>
-              <button onClick={onClose} className="mt-6 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition">关闭</button>
+              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">获取详情失败</h3>
+              <p className="text-slate-500 dark:text-slate-400 mt-2 max-w-xs">{error}</p>
+              <button onClick={onClose} className="mt-6 px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition">关闭</button>
             </div>
           );
         } else if (data) {
@@ -440,23 +484,23 @@ function renderHtml(initData) {
               {/* 标题区 */}
               <div className="flex items-center justify-between">
                   <div>
-                    <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                    <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                         🔍 IP 详细信息
                     </h2>
                     <span className="text-xs text-slate-400 mt-1 block">数据来源: ipapi.is</span>
                   </div>
-                  <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition">
+                  <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition">
                       <X className="w-5 h-5 text-slate-500" />
                   </button>
               </div>
 
               {/* 1. 基本信息 */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
                   <SectionTitle icon={Info} title="基本信息" />
                   <div className="space-y-1">
-                      <div className="flex flex-col sm:flex-row justify-between py-2 border-b border-slate-50">
+                      <div className="flex flex-col sm:flex-row justify-between py-2 border-b border-slate-50 dark:border-slate-700">
                           <span className="text-slate-500 text-sm font-medium">IP 地址</span>
-                          <span className="text-lg font-mono font-bold text-slate-900 break-all text-right">{data.ip}</span>
+                          <span className="text-lg font-mono font-bold text-slate-900 dark:text-slate-100 break-all text-right">{data.ip}</span>
                       </div>
                       <InfoItem label="区域注册机构" value={data.rir || '未知'} highlight />
                       <InfoItem
@@ -489,12 +533,12 @@ function renderHtml(initData) {
               </div>
 
               {/* 2. 安全检测 */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
                    <SectionTitle icon={ShieldCheck} title="安全检测" />
                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-2 gap-x-8">
                         {SECURITY_CHECK_ITEMS.map(({ key, label }) => (
                             <div key={key} className="flex justify-between items-center py-1">
-                                <span className="text-slate-600 text-sm">{label}</span>
+                                <span className="text-slate-600 dark:text-slate-300 text-sm">{label}</span>
                                 <BoolBadge value={data[key]} trueLabel="是" falseLabel="否" />
                             </div>
                         ))}
@@ -502,7 +546,7 @@ function renderHtml(initData) {
               </div>
 
               {/* 3. 位置信息 */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
                   <SectionTitle icon={MapPin} title="位置信息" />
                   <div className="space-y-1">
                       <InfoItem label="国家" value={\`\${data.location?.country || '未知'} (\${data.location?.country_code || '-'}) \${data.location?.is_eu_member ? '🇪🇺' : ''}\`} />
@@ -516,7 +560,7 @@ function renderHtml(initData) {
               </div>
 
               {/* 4. 运营商信息 */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
                    <SectionTitle icon={Server} title="运营商信息" />
                    <div className="space-y-1">
                        <InfoItem label="运营商名称" value={data.company?.name || '未知'} highlight />
@@ -537,7 +581,7 @@ function renderHtml(initData) {
               </div>
 
               {/* 5. ASN 信息 */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
                    <SectionTitle icon={Activity} title="ASN 信息" />
                    <div className="space-y-1">
                        <InfoItem label="ASN 编号" value={data.asn?.asn ? \`AS\${data.asn.asn}\` : '未知'} highlight />
@@ -560,7 +604,7 @@ function renderHtml(initData) {
 
               {/* 6. 滥用举报联系方式 */}
               {data.abuse && (
-                  <div className="bg-slate-50 rounded-xl border border-slate-200 p-4 shadow-sm">
+                  <div className="bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
                       <SectionTitle icon={Shield} title="滥用举报联系方式" />
                       <div className="space-y-1 text-sm">
                           {data.abuse.name && <InfoItem label="联系人" value={data.abuse.name} />}
@@ -578,13 +622,13 @@ function renderHtml(initData) {
           <div className="fixed inset-0 z-50 overflow-y-auto" role="dialog" aria-modal="true" aria-label="IP 详细信息">
             <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm transition-opacity" onClick={handleBackdropClick}></div>
             <div className="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
-              <div className="relative transform overflow-hidden rounded-2xl bg-white text-left shadow-2xl transition-all sm:my-8 sm:w-full sm:max-w-3xl max-h-[90vh] overflow-y-auto scrollbar-hide">
+              <div className="relative transform overflow-hidden rounded-2xl bg-white dark:bg-slate-900 text-left shadow-2xl transition-all sm:my-8 sm:w-full sm:max-w-3xl max-h-[90vh] overflow-y-auto scrollbar-hide">
                 <div className="absolute top-4 right-4 z-10 md:hidden">
                   <button type="button" aria-label="关闭" className="rounded-full bg-white/80 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition focus:outline-none" onClick={onClose}>
                     <X className="w-5 h-5" />
                   </button>
                 </div>
-                <div className="p-6 sm:p-8 bg-[#f8fafc]">{content}</div>
+                <div className="p-6 sm:p-8 bg-[#f8fafc] dark:bg-slate-900">{content}</div>
               </div>
             </div>
           </div>
@@ -595,8 +639,8 @@ function renderHtml(initData) {
         const { sourceName, sourceUrl, sourceIcon, ip, isp, countryCode, countryName, isLoading, error } = data;
 
         return (
-          <div className="bg-white rounded-xl shadow-sm border border-slate-200 hover:shadow-md transition-shadow duration-200 overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-slate-50 bg-slate-50/50 flex items-center justify-between">
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow duration-200 overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-slate-50 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 {sourceIcon ? (
                   <img src={sourceIcon} alt={sourceName} className="w-5 h-5 rounded-md object-cover" />
@@ -605,7 +649,7 @@ function renderHtml(initData) {
                     {sourceName.substring(0, 2).toUpperCase()}
                   </div>
                 )}
-                <h3 className="font-semibold text-slate-800 text-sm">{sourceName}</h3>
+                <h3 className="font-semibold text-slate-800 dark:text-slate-200 text-sm">{sourceName}</h3>
                 <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-indigo-500 transition">
                     <ExternalLink className="w-3.5 h-3.5" />
                 </a>
@@ -618,13 +662,13 @@ function renderHtml(initData) {
                 <div className="text-center">
                   <p className="text-red-500 text-sm mb-2">{error}</p>
                   {onRetry && (
-                      <button onClick={onRetry} className="text-xs text-slate-500 hover:text-slate-800 underline">重试</button>
+                      <button onClick={onRetry} className="text-xs text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 underline">重试</button>
                   )}
                 </div>
               ) : isLoading ? (
                 <div className="space-y-3 animate-pulse">
-                  <div className="h-6 bg-slate-100 rounded w-3/4 mx-auto"></div>
-                  <div className="h-4 bg-slate-100 rounded w-1/2 mx-auto"></div>
+                  <div className="h-6 bg-slate-100 dark:bg-slate-700 rounded w-3/4 mx-auto"></div>
+                  <div className="h-4 bg-slate-100 dark:bg-slate-700 rounded w-1/2 mx-auto"></div>
                 </div>
               ) : (
                 <div className="text-center">
@@ -635,13 +679,13 @@ function renderHtml(initData) {
                       <div className="text-xs text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity absolute -bottom-4 left-1/2 transform -translate-x-1/2 whitespace-nowrap">点击查看详情</div>
                   </div>
 
-                  <div className="mt-4 flex items-center justify-center gap-2 text-sm text-slate-600">
+                  <div className="mt-4 flex items-center justify-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                       <span className="text-xl">{getFlagEmoji(countryCode)}</span>
                       <span className="font-medium">{countryName || '未知位置'}</span>
                   </div>
 
                   {isp && isp !== '-' && (
-                      <div className="mt-2 text-xs text-slate-400 font-medium px-2 py-1 bg-slate-50 rounded-lg inline-block max-w-full truncate">
+                      <div className="mt-2 text-xs text-slate-400 font-medium px-2 py-1 bg-slate-50 dark:bg-slate-700 rounded-lg inline-block max-w-full truncate">
                           {isp}
                       </div>
                   )}
@@ -802,17 +846,18 @@ function renderHtml(initData) {
         };
 
         return (
-          <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
-            <header className="bg-white border-b border-slate-200 sticky top-0 z-30 bg-opacity-80 backdrop-blur-md">
+          <div className="min-h-screen bg-slate-50 dark:bg-slate-900 font-sans text-slate-900 dark:text-slate-100 transition-colors duration-300">
+            <header className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-30 bg-opacity-80 dark:bg-opacity-80 backdrop-blur-md">
               <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="bg-indigo-600 p-1.5 rounded-lg text-white shadow-sm shadow-indigo-200">
+                  <div className="bg-indigo-600 p-1.5 rounded-lg text-white shadow-sm shadow-indigo-200 dark:shadow-indigo-900">
                       <ShieldCheck className="w-6 h-6" />
                   </div>
-                  <h1 className="text-xl font-bold text-slate-900 tracking-tight">IP 哨兵</h1>
+                  <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">IP 哨兵</h1>
                 </div>
-                <div className="flex items-center gap-4">
-                   <a href="https://github.com/jy02739244/ip-query-worker" target="_blank" rel="noreferrer" className="text-slate-400 hover:text-slate-800 transition">
+                <div className="flex items-center gap-2">
+                   <ThemeToggle />
+                   <a href="https://github.com/jy02739244/ip-query-worker" target="_blank" rel="noreferrer" className="text-slate-400 hover:text-slate-800 dark:hover:text-white transition">
                       <Github className="w-5 h-5" />
                    </a>
                 </div>
@@ -821,8 +866,8 @@ function renderHtml(initData) {
 
             <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
               <div className="mb-8 text-center md:text-left">
-                  <h2 className="text-2xl font-bold text-slate-800 mb-2">网络身份分析</h2>
-                  <p className="text-slate-500 max-w-2xl">
+                  <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-2">网络身份分析</h2>
+                  <p className="text-slate-500 dark:text-slate-400 max-w-2xl">
                       分析各服务商下的连接可见性。检测 IP 暴露情况，通过实时风控评分检查代理/VPN 泄漏。
                   </p>
               </div>
@@ -843,7 +888,7 @@ function renderHtml(initData) {
                 ))}
               </div>
 
-              <div className="mt-12 pt-8 border-t border-slate-200 flex flex-col md:flex-row items-center justify-between text-sm text-slate-400 gap-4">
+              <div className="mt-12 pt-8 border-t border-slate-200 dark:border-slate-700 flex flex-col md:flex-row items-center justify-between text-sm text-slate-400 gap-4">
                   <div className="flex items-center gap-2">
                       <Globe className="w-4 h-4" />
                       <span>基于 Cloudflare & React 构建</span>
