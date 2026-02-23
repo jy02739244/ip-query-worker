@@ -785,7 +785,7 @@ function renderHtml(initData) {
                   <h1 className="text-xl font-bold text-slate-900 tracking-tight">IP 哨兵</h1>
                 </div>
                 <div className="flex items-center gap-4">
-                   <a href="https://github.com/jy02739245/workers-vless/tree/main/other" target="_blank" rel="noreferrer" className="text-slate-400 hover:text-slate-800 transition">
+                   <a href="https://github.com/jy02739244/ip-query-worker" target="_blank" rel="noreferrer" className="text-slate-400 hover:text-slate-800 transition">
                       <Github className="w-5 h-5" />
                    </a>
                 </div>
