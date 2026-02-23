@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛡️ IP 哨兵
+# <img src="docs/logo.svg" width="28" height="28" alt="IP 哨兵" /> IP 哨兵
 
 **多源 IP 情报分析工具 · 网络身份可见性检测**
 
