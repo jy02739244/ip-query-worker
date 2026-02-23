@@ -1,0 +1,6 @@
+name = "ip-query-worker"
+main = "src/_worker.js"
+compatibility_date = "2025-09-12"
+
+[build]
+command = "echo build"
