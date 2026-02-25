@@ -140,7 +140,7 @@ export default {
     return new Response(renderHtml(initData), {
       headers: {
         'content-type': 'text/html;charset=UTF-8',
-        'Cache-Control': 'public, max-age=300',
+        'Cache-Control': 'private, no-store',
         ...SECURITY_HEADERS,
       },
     });
