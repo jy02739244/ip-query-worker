@@ -96,6 +96,21 @@
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/jy02739244/ip-query-worker)
 
+### 🔗 Fork 部署（推荐）
+
+Fork 部署可以保持与上游仓库的关联，方便后续同步更新：
+
+**第一步**：Fork 本仓库到你的 GitHub 账号
+
+[![Fork this repo](https://img.shields.io/badge/GitHub-Fork_本仓库-blue?style=for-the-badge&logo=github)](https://github.com/jy02739244/ip-query-worker/fork)
+
+**第二步**：点击下方按钮，选择 **Continue with GitHub**，然后选择你 Fork 的仓库进行部署
+
+[![Deploy with Cloudflare](https://img.shields.io/badge/Cloudflare-部署到_Workers-F38020?style=for-the-badge&logo=cloudflare&logoColor=white)](https://dash.cloudflare.com/?to=/:account/workers-and-pages/create)
+
+> [!TIP]
+> 当上游仓库更新后，你可以在 GitHub 中点击 **Sync fork** 同步最新代码，Cloudflare 会自动重新构建部署。
+
 ### 手动部署（无需本地环境）
 
 如果不想配置本地开发环境，可以直接通过 Cloudflare Dashboard 手动部署：
