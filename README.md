@@ -90,6 +90,12 @@
 
 ## 🚀 快速开始
 
+### ⚡ 一键部署
+
+点击下方按钮，即可自动跳转到 Cloudflare 部署页面，自动克隆仓库并完成部署：
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/jy02739244/ip-query-worker)
+
 ### 手动部署（无需本地环境）
 
 如果不想配置本地开发环境，可以直接通过 Cloudflare Dashboard 手动部署：
