@@ -41,6 +41,8 @@
 | **X.com** | 通过 `help.x.com` 的 CDN Trace 检测 |
 | **OpenAI** | 通过 `openai.com` 的 CDN Trace 检测 |
 | **Grok** | 通过 `grok.com` 的 CDN Trace 检测 |
+| **WebRTC 探测** | 通过 RTCPeerConnection ICE candidates 检测 IP 泄漏 |
+| **DNS 探测** | 通过 DoH 查询检测 DNS 解析器和出口 IP |
 
 ### 🔍 IP 深度分析
 点击任意 IP 地址，查看来自 [ipapi.is](https://ipapi.is) 的详细情报：
@@ -55,8 +57,8 @@
 ### 🎯 VPN / 代理泄漏检测
 通过对比多个数据源返回的 IP 和地理位置，快速判断是否存在：
 - 代理/VPN 泄漏（不同平台看到不同 IP）
-- DNS 泄漏
-- WebRTC 泄漏迹象
+- **DNS 泄漏** — 通过 Cloudflare DoH 和 Google DNS 检测实际使用的 DNS 解析器
+- **WebRTC 泄漏** — 通过 RTCPeerConnection ICE candidates 检测本地/公网 IP 暴露
 
 ## 🛠️ 技术架构
 
@@ -190,6 +192,10 @@ ip-query-worker/
 | `api-ipv6.ip.sb` | IPv6 地址 + 地理信息 | 浏览器直连 |
 | `api.ipapi.is` | 综合 IP 情报（含风控） | Worker 中转 |
 | `*/cdn-cgi/trace` | CDN 出口 IP | 浏览器直连 |
+| `RTCPeerConnection` | WebRTC 泄漏检测（本地/公网 IP） | 浏览器 API |
+| `cloudflare-dns.com` | DNS 解析器检测（DoH） | 浏览器直连 |
+| `dns.google` | DNS 解析器检测（备用 DoH） | 浏览器直连 |
+| `1.1.1.1/cdn-cgi/trace` | DNS 出口 IP 和位置 | 浏览器直连 |
 
 ## 📝 许可证
 

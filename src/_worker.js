@@ -128,6 +128,39 @@ export default {
       }
     }
 
+    if (url.pathname === '/api/cf-trace') {
+      try {
+        const response = await fetch('https://1.1.1.1/cdn-cgi/trace', {
+          headers: { 'Accept': 'text/plain' },
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const text = await response.text();
+        const traceIP = text.match(/ip=([^\n]+)/)?.[1] || null;
+        const traceLocation = text.match(/loc=([^\n]+)/)?.[1] || null;
+
+        return new Response(JSON.stringify({ ip: traceIP, location: traceLocation }), {
+          headers: {
+            'content-type': 'application/json;charset=UTF-8',
+            'Cache-Control': 'public, max-age=15',
+            ...CORS_HEADERS,
+            ...SECURITY_HEADERS,
+          },
+        });
+      } catch (error) {
+        return new Response(JSON.stringify({ error: error.message }), {
+          status: 502,
+          headers: {
+            'content-type': 'application/json;charset=UTF-8',
+            ...CORS_HEADERS,
+            ...SECURITY_HEADERS,
+          },
+        });
+      }
+    }
+
     // 获取 Cloudflare 识别的访问者信息
     const cf = request.cf || {};
     const clientIp = request.headers.get("cf-connecting-ip") ||
@@ -233,7 +266,7 @@ function renderHtml(initData) {
 
     <!-- 应用程序逻辑 -->
     <script type="text/babel" data-presets="react">
-      const { useState, useEffect, useCallback } = React;
+      const { useState, useEffect, useCallback, useRef } = React;
       const { createRoot } = ReactDOM;
 
       // 简化图标实现，避免依赖 lucide-react
@@ -247,6 +280,10 @@ function renderHtml(initData) {
 
       const RefreshCcw = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 2v6h6"></path><path d="M21 12A9 9 0 0 0 6 5.3L3 8"></path><path d="M21 22v-6h-6"></path><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"></path></svg>;
       const ExternalLink = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>;
+      // WiFi 图标（WebRTC 探测）
+      const Wifi = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h.01"></path><path d="M2 8.82a15 15 0 0 1 20 0"></path><path d="M5 12.859a10 10 0 0 1 14 0"></path><path d="M8.5 16.429a5 5 0 0 1 7 0"></path></svg>;
+      // DNS 图标
+      const Dns = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line><line x1="10" y1="6" x2="18" y2="6"></line><line x1="10" y1="18" x2="18" y2="18"></line></svg>;
       const X = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>;
       const Shield = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path></svg>;
       const Server = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" x2="6" y1="6" y2="6"></line><line x1="6" x2="6" y1="18" y2="18"></line></svg>;
@@ -704,6 +741,312 @@ function renderHtml(initData) {
         );
       };
 
+      // --- 泄漏检测卡片组件 ---
+      const LeakDetectionCard = ({ icon: Icon, title, isLoading, status, statusText, children }) => {
+        // status: 'safe' | 'leak' | 'unknown' | 'unsupported'
+        const statusConfig = {
+          safe: { bg: 'bg-emerald-50 dark:bg-emerald-900/20', border: 'border-emerald-200 dark:border-emerald-800', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400', icon: '✅' },
+          leak: { bg: 'bg-red-50 dark:bg-red-900/20', border: 'border-red-200 dark:border-red-800', badge: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400', icon: '⚠️' },
+          unknown: { bg: 'bg-slate-50 dark:bg-slate-800', border: 'border-slate-200 dark:border-slate-700', badge: 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400', icon: '❓' },
+          unsupported: { bg: 'bg-slate-50 dark:bg-slate-800', border: 'border-slate-200 dark:border-slate-700', badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400', icon: '🚫' },
+        };
+        const cfg = statusConfig[status] || statusConfig.unknown;
+
+        return (
+          <div className={'rounded-xl shadow-sm border ' + cfg.border + ' ' + cfg.bg + ' overflow-hidden transition-all duration-300'}>
+            <div className="p-4 border-b border-slate-100 dark:border-slate-700/50 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="bg-indigo-100 dark:bg-indigo-900/40 p-1.5 rounded-lg text-indigo-600 dark:text-indigo-400">
+                  <Icon className="w-4 h-4" />
+                </div>
+                <h3 className="font-semibold text-slate-800 dark:text-slate-200 text-sm">{title}</h3>
+              </div>
+              {isLoading ? (
+                <RefreshCcw className="w-4 h-4 text-indigo-400 animate-spin" />
+              ) : (
+                <span className={'inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ' + cfg.badge}>
+                  {cfg.icon} {statusText}
+                </span>
+              )}
+            </div>
+            <div className="p-5">
+              {isLoading ? (
+                <div className="space-y-3 animate-pulse">
+                  <div className="h-4 bg-slate-200/60 dark:bg-slate-700 rounded w-3/4"></div>
+                  <div className="h-4 bg-slate-200/60 dark:bg-slate-700 rounded w-1/2"></div>
+                  <div className="h-4 bg-slate-200/60 dark:bg-slate-700 rounded w-2/3"></div>
+                </div>
+              ) : children}
+            </div>
+          </div>
+        );
+      };
+
+      // --- 泄漏检测区域 ---
+      const LeakDetectionSection = ({ currentIP }) => {
+        const [webrtc, setWebrtc] = useState({ loading: true, data: null });
+        const [dns, setDns] = useState({ loading: true, data: null });
+        const [lastCheckedAt, setLastCheckedAt] = useState(null);
+        const mountedRef = useRef(true);
+
+        const runLeakChecks = useCallback(() => {
+          setWebrtc((prev) => ({ ...prev, loading: true }));
+          setDns((prev) => ({ ...prev, loading: true }));
+
+          const webrtcTask = ipService.detectWebRTC()
+            .then(result => {
+              if (!mountedRef.current) return;
+              setWebrtc({ loading: false, data: result });
+            })
+            .catch((err) => {
+              if (!mountedRef.current) return;
+              setWebrtc({
+                loading: false,
+                data: {
+                  supported: false,
+                  localIPs: [],
+                  publicIPs: [],
+                  error: err instanceof Error ? err.message : 'WebRTC 检测失败',
+                }
+              });
+            });
+
+          const dnsTask = ipService.detectDNS()
+            .then(result => {
+              if (!mountedRef.current) return;
+              setDns({ loading: false, data: result });
+            })
+            .catch((err) => {
+              if (!mountedRef.current) return;
+              setDns({
+                loading: false,
+                data: {
+                  trace: null,
+                  resolvers: [],
+                  observations: [],
+                  errors: [{ source: 'dns-observer', message: err instanceof Error ? err.message : 'DNS 观测失败' }],
+                  error: 'DNS 观测失败'
+                }
+              });
+            });
+
+          Promise.allSettled([webrtcTask, dnsTask]).then(() => {
+            if (!mountedRef.current) return;
+            setLastCheckedAt(new Date());
+          });
+        }, []);
+
+        useEffect(() => {
+          runLeakChecks();
+
+          return () => {
+            mountedRef.current = false;
+          };
+        }, [runLeakChecks]);
+
+        // 计算 WebRTC 状态
+        const getWebRTCStatus = () => {
+          if (webrtc.loading) return { status: 'unknown', text: '检测中...' };
+          if (!webrtc.data?.supported) return { status: 'unsupported', text: '不支持' };
+          const { publicIPs, localIPs } = webrtc.data;
+          if (webrtc.data?.error && publicIPs.length === 0 && localIPs.length === 0) return { status: 'unknown', text: '检测失败' };
+          if (localIPs.length > 0) return { status: 'leak', text: '本地暴露' };
+          if (publicIPs.length === 0) return { status: 'safe', text: '未暴露' };
+          if (currentIP && publicIPs.length === 1 && publicIPs[0] === currentIP) return { status: 'safe', text: '与当前一致' };
+          if (currentIP && publicIPs.includes(currentIP) && publicIPs.length > 1) return { status: 'unknown', text: '多出口' };
+          if (currentIP && !publicIPs.includes(currentIP)) return { status: 'unknown', text: '出口不同' };
+          return { status: 'unknown', text: '已检测' };
+        };
+
+        // 计算 DNS 状态
+        const getDNSStatus = () => {
+          if (dns.loading) return { status: 'unknown', text: '检测中...' };
+          if (!dns.data) return { status: 'unknown', text: '无数据' };
+
+          const observedIPs = new Set([dns.data.trace?.ip, ...(dns.data.resolvers || [])].filter(Boolean));
+          if (dns.data?.error && observedIPs.size === 0) return { status: 'unknown', text: '检测失败' };
+          if (observedIPs.size === 0) return { status: 'unknown', text: '无数据' };
+
+          if (currentIP && observedIPs.size === 1 && observedIPs.has(currentIP)) return { status: 'safe', text: '与当前一致' };
+          if (currentIP && observedIPs.has(currentIP) && observedIPs.size > 1) return { status: 'unknown', text: '多出口' };
+          if (currentIP && !observedIPs.has(currentIP)) return { status: 'unknown', text: '出口不同' };
+          return { status: 'unknown', text: '已观测' };
+        };
+
+        const formatObserverError = (message) => {
+          const msg = String(message || '未知错误');
+          const lower = msg.toLowerCase();
+          if (lower.includes('aborterror') || lower.includes('timed out') || lower.includes('timeout')) return '请求超时';
+          if (lower.includes('cors')) return '跨域访问被拦截';
+          if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('connection') || lower.includes('reset')) return '网络连接失败或被拦截';
+          if (lower.includes('http ')) return '服务端返回错误（' + msg + '）';
+          return msg;
+        };
+
+        const webrtcStatus = getWebRTCStatus();
+        const dnsStatus = getDNSStatus();
+
+        return (
+          <div className="mt-10">
+            <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="text-center md:text-left">
+                <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100 mb-1 flex items-center gap-2 justify-center md:justify-start">
+                  <Shield className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                  泄漏检测
+                </h2>
+                <p className="text-slate-500 dark:text-slate-400 text-sm">
+                  观测 WebRTC 与 DNS 路径可见信息（结果仅供参考）
+                </p>
+              </div>
+              <div className="flex justify-center md:justify-end">
+                <div className="flex flex-col items-center md:items-end gap-1">
+                  <button
+                    type="button"
+                    onClick={runLeakChecks}
+                    disabled={webrtc.loading || dns.loading}
+                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-sm font-medium text-slate-700 dark:text-slate-200 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-60 disabled:cursor-not-allowed transition"
+                  >
+                    <RefreshCcw className={'w-4 h-4 ' + ((webrtc.loading || dns.loading) ? 'animate-spin text-indigo-500' : 'text-slate-500')} />
+                    重新检测
+                  </button>
+                  <span className="text-xs text-slate-400 dark:text-slate-500">
+                    {lastCheckedAt ? ('上次检测: ' + lastCheckedAt.toLocaleTimeString('zh-CN', { hour12: false })) : '尚未完成检测'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* WebRTC 泄漏检测 */}
+              <LeakDetectionCard
+                icon={Wifi}
+                title="WebRTC 泄漏检测"
+                isLoading={webrtc.loading}
+                status={webrtcStatus.status}
+                statusText={webrtcStatus.text}
+              >
+                {webrtc.data && !webrtc.data.supported ? (
+                  <div className="text-center py-4">
+                    <p className="text-slate-500 dark:text-slate-400 text-sm">{webrtc.data.error || '浏览器不支持或已禁用 WebRTC'}</p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 mt-2">无法通过 WebRTC 泄漏 IP 地址</p>
+                  </div>
+                ) : webrtc.data ? (
+                  <div className="space-y-3">
+                    {/* 公网 IP */}
+                    <div>
+                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">公网 IP <span className="normal-case text-slate-400 dark:text-slate-500">（来源: STUN 服务器）</span></span>
+                      {webrtc.data.publicIPs.length > 0 ? (
+                        <div className="mt-1 space-y-1">
+                          {webrtc.data.publicIPs.map((ip, i) => (
+                            <div key={i} className={'flex items-center gap-2 text-sm font-mono py-1 px-2 rounded ' + (ip === currentIP ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400' : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400')}>
+                              <span>{ip}</span>
+                              {ip === currentIP && <span className="text-xs font-sans">✓ 与 Worker 一致</span>}
+                              {ip !== currentIP && <span className="text-xs font-sans">≠ 可能为不同出口</span>}
+                            </div>
+                          ))}
+                          <p className="text-xs text-slate-400 dark:text-slate-500 mt-1 leading-relaxed">使用分流代理时，STUN 出口 IP 与 Worker 连接 IP 不同可能是正常现象，不能单独作为泄漏结论。</p>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-emerald-600 dark:text-emerald-400 mt-1">✓ 未检测到公网 IP 暴露</p>
+                      )}
+                    </div>
+                    {/* 本地 IP */}
+                    <div>
+                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">本地 IP</span>
+                      {webrtc.data.localIPs.length > 0 ? (
+                        <div className="mt-1 space-y-1">
+                          {webrtc.data.localIPs.map((ip, i) => (
+                            <div key={i} className="text-sm font-mono py-1 px-2 rounded bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400">
+                              {ip} <span className="text-xs font-sans">（内网地址，存在可见性暴露风险）</span>
+                            </div>
+                          ))}
+                          <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">若你不希望网页获取局域网地址，可视为 WebRTC 泄漏风险。</p>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-emerald-600 dark:text-emerald-400 mt-1">✓ 未检测到本地 IP 暴露</p>
+                      )}
+                    </div>
+                    {/* 当前连接 IP 参考 */}
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-700/50">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-400">当前连接 IP（参考）</span>
+                        <span className="font-mono text-slate-600 dark:text-slate-300">{currentIP}</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </LeakDetectionCard>
+
+              {/* DNS 泄漏检测 */}
+              <LeakDetectionCard
+                icon={Dns}
+                title="DNS 路径观测"
+                isLoading={dns.loading}
+                status={dnsStatus.status}
+                statusText={dnsStatus.text}
+              >
+                {dns.data ? (
+                  <div className="space-y-3">
+                    {/* DNS 出口 IP */}
+                    {dns.data.trace?.ip && (
+                      <div>
+                        <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cloudflare Trace 出口 IP</span>
+                        <div className={'mt-1 flex items-center gap-2 text-sm font-mono py-1 px-2 rounded ' + (dns.data.trace.ip === currentIP ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400' : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400')}>
+                          <span>{dns.data.trace.ip}</span>
+                          {dns.data.trace.location && <span className="text-xs font-sans">({getFlagEmoji(dns.data.trace.location)} {dns.data.trace.location})</span>}
+                          {dns.data.trace.source && <span className="text-xs font-sans opacity-80">[{dns.data.trace.source}]</span>}
+                          {dns.data.trace.ip !== currentIP && <span className="text-xs font-sans">≠ 与 Worker 不同</span>}
+                          {dns.data.trace.ip === currentIP && <span className="text-xs font-sans">✓ 一致</span>}
+                        </div>
+                      </div>
+                    )}
+                    {/* DoH 观测项 */}
+                    <div>
+                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">DoH 观测项（myaddr）</span>
+                      {dns.data.observations?.length > 0 ? (
+                        <div className="mt-1 space-y-1">
+                          {dns.data.observations.map((obs, i) => (
+                            <div key={i} className={'text-sm py-1 px-2 rounded font-mono ' + ((obs.kind === 'resolver-observed' && obs.value === currentIP) ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400' : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400')}>
+                              <span>{obs.value}</span>
+                              <span className="text-xs font-sans ml-2 opacity-80">[{obs.source}]</span>
+                              {obs.kind === 'ecs-subnet' && <span className="text-xs font-sans ml-2">(ECS 子网)</span>}
+                              {obs.kind === 'resolver-observed' && obs.value === currentIP && <span className="text-xs font-sans ml-2">✓ 一致</span>}
+                              {obs.kind === 'resolver-observed' && obs.value !== currentIP && <span className="text-xs font-sans ml-2">≠ 可能为不同出口</span>}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">未获取到 DoH 观测项</p>
+                      )}
+                    </div>
+                    {dns.data.errors?.length > 0 && (
+                      <div>
+                        <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">观测错误</span>
+                        <div className="mt-1 space-y-1">
+                          {dns.data.errors.map((err, i) => (
+                            <div key={i} className="text-xs py-1 px-2 rounded bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400">
+                              [{err.source}] {formatObserverError(err.message)}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed">说明：此项为 DNS 路径可见性观测（基于 DoH 与 HTTP 出口），不能单独证明系统 DNS 是否发生泄漏。</p>
+                    {/* 当前连接 IP 参考 */}
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-700/50">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-400">当前连接 IP（参考）</span>
+                        <span className="font-mono text-slate-600 dark:text-slate-300">{currentIP}</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </LeakDetectionCard>
+            </div>
+          </div>
+        );
+      };
+
       // --- Cloudflare Trace 通用请求工厂（消除重复代码）---
       const createTraceFetcher = (url) => async () => {
         try {
@@ -770,6 +1113,253 @@ function renderHtml(initData) {
           const res = await fetchWithTimeout(\`/api/ipapi?q=\${ip}\`);
           if (!res.ok) throw new Error('详情查询失败');
           return await res.json();
+        },
+
+        // --- WebRTC 泄漏检测 ---
+        detectWebRTC: () => {
+          return new Promise((resolve) => {
+            const RTCPeer = window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection;
+            if (!RTCPeer) {
+              resolve({ supported: false, localIPs: [], publicIPs: [], error: '浏览器不支持 WebRTC' });
+              return;
+            }
+
+            const ips = new Set();
+            const localIPs = new Set();
+            const publicIPs = new Set();
+            let resolved = false;
+
+            const isIPv4 = (ip) => {
+              const parts = ip.split('.');
+              return parts.length === 4 && parts.every((part) => /^\\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
+            };
+
+            const isIPv6 = (ip) => {
+              return ip.includes(':') && /^[0-9a-fA-F:]+$/.test(ip);
+            };
+
+            const isPrivateIP = (ip) => {
+              if (isIPv4(ip)) {
+                const [a, b] = ip.split('.').map(Number);
+                if (a === 10) return true;
+                if (a === 172 && b >= 16 && b <= 31) return true;
+                if (a === 192 && b === 168) return true;
+                if (a === 127) return true;
+                if (a === 169 && b === 254) return true;
+                if (a === 100 && b >= 64 && b <= 127) return true;
+                return false;
+              }
+
+              if (isIPv6(ip)) {
+                const lower = ip.toLowerCase();
+                return lower === '::1' || lower.startsWith('fe80:') || lower.startsWith('fc') || lower.startsWith('fd');
+              }
+
+              return false;
+            };
+
+            const collectIP = (rawIP) => {
+              if (!rawIP) return;
+              const ip = rawIP.split('%')[0];
+              if (!isIPv4(ip) && !isIPv6(ip)) return;
+              if (ips.has(ip)) return;
+
+              ips.add(ip);
+              if (isPrivateIP(ip)) {
+                localIPs.add(ip);
+              } else {
+                publicIPs.add(ip);
+              }
+            };
+
+            try {
+              const pc = new RTCPeer({
+                iceServers: [
+                  { urls: 'stun:stun.l.google.com:19302' },
+                  { urls: 'stun:stun1.l.google.com:19302' },
+                  { urls: 'stun:stun.cloudflare.com:3478' },
+                  { urls: 'stun:stun.nextcloud.com:443' },
+                ]
+              });
+
+              pc.onicecandidate = (event) => {
+                if (!event.candidate) return;
+                const candidateLine = event.candidate.candidate || '';
+                const parts = candidateLine.trim().split(/\\s+/);
+
+                collectIP(event.candidate.address);
+                if (parts[4]) collectIP(parts[4]);
+
+                const raddrIndex = parts.indexOf('raddr');
+                if (raddrIndex !== -1 && parts[raddrIndex + 1]) {
+                  collectIP(parts[raddrIndex + 1]);
+                }
+              };
+
+              pc.onicegatheringstatechange = () => {
+                if (pc.iceGatheringState === 'complete' && !resolved) {
+                  resolved = true;
+                  pc.close();
+                  resolve({ supported: true, localIPs: [...localIPs], publicIPs: [...publicIPs] });
+                }
+              };
+
+              pc.createDataChannel('');
+              pc.createOffer().then(offer => pc.setLocalDescription(offer)).catch(() => {});
+
+              setTimeout(() => {
+                if (!resolved) {
+                  resolved = true;
+                  try { pc.close(); } catch(e) {}
+                  resolve({ supported: true, localIPs: [...localIPs], publicIPs: [...publicIPs] });
+                }
+              }, 3000);
+
+            } catch (e) {
+              resolve({ supported: false, localIPs: [], publicIPs: [], error: 'WebRTC 初始化失败' });
+            }
+          });
+        },
+
+        // --- DNS 泄漏检测 ---
+        detectDNS: async () => {
+          const results = {
+            trace: null,
+            resolvers: [],
+            observations: [],
+            errors: [],
+            error: null,
+          };
+
+          const isIPv4 = (ip) => {
+            const parts = ip.split('.');
+            return parts.length === 4 && parts.every((part) => /^\\d+$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
+          };
+
+          const isIPv6 = (ip) => {
+            return ip.includes(':') && /^[0-9a-fA-F:]+$/.test(ip);
+          };
+
+          const pushObservedIP = (ip) => {
+            if (!ip) return;
+            if (!isIPv4(ip) && !isIPv6(ip)) return;
+            if (!results.resolvers.includes(ip)) {
+              results.resolvers.push(ip);
+            }
+          };
+
+          const pushObservation = (source, kind, value) => {
+            if (!value) return;
+            if (kind === 'resolver-observed' && !isIPv4(value) && !isIPv6(value)) return;
+            const exists = results.observations.some((item) => item.source === source && item.kind === kind && item.value === value);
+            if (exists) return;
+            results.observations.push({ source, kind, value });
+            if (kind === 'resolver-observed') {
+              pushObservedIP(value);
+            }
+          };
+
+          const pushError = (source, err) => {
+            const message = err instanceof Error ? err.message : String(err || '未知错误');
+            results.errors.push({ source, message });
+          };
+
+          const collectIPsFromAnswer = (answerData, source) => {
+            const val = (answerData || '').replace(/"/g, '').trim();
+            if (!val) return;
+
+            const cleanToken = (token) => token
+              .replace(/^[^\\w:]+/, '')
+              .replace(/[^\\w:/]+$/, '');
+            const tokens = val.split(/[\s,]+/).map(cleanToken).filter(Boolean);
+
+            tokens.forEach((rawToken) => {
+              const token = rawToken.includes('=') ? rawToken.split('=').pop() : rawToken;
+              if (!token || /^edns0-client-subnet$/i.test(token)) return;
+
+              if (token.includes('/')) {
+                const [ip, prefix] = token.split('/');
+                if ((isIPv4(ip) || isIPv6(ip)) && /^\d{1,3}$/.test(prefix)) {
+                  pushObservation(source, 'ecs-subnet', ip + '/' + prefix);
+                }
+                return;
+              }
+
+              if (isIPv4(token) || isIPv6(token)) {
+                pushObservation(source, 'resolver-observed', token);
+              }
+            });
+          };
+
+          const fetchTraceFromBrowser = async () => {
+            const traceRes = await fetchWithTimeout('https://1.1.1.1/cdn-cgi/trace', {}, 5000);
+            if (!traceRes.ok) throw new Error('HTTP ' + traceRes.status);
+            const text = await traceRes.text();
+            const traceIP = text.match(/ip=([^\\n]+)/)?.[1] || null;
+            const traceLocation = text.match(/loc=([^\\n]+)/)?.[1] || null;
+            if (traceIP) {
+              results.trace = { ip: traceIP, location: traceLocation, source: 'browser-trace' };
+            }
+          };
+
+          const fetchTraceFromWorker = async () => {
+            const traceRes = await fetchWithTimeout('/api/cf-trace', {}, 5000);
+            if (!traceRes.ok) throw new Error('HTTP ' + traceRes.status);
+            const data = await traceRes.json();
+            const traceIP = data?.ip || null;
+            const traceLocation = data?.location || null;
+            if (traceIP) {
+              results.trace = { ip: traceIP, location: traceLocation, source: 'worker-trace' };
+            }
+          };
+
+          try {
+            await fetchTraceFromBrowser();
+          } catch (e) {
+            pushError('browser-trace', e);
+            try {
+              await fetchTraceFromWorker();
+            } catch (fallbackErr) {
+              pushError('worker-trace', fallbackErr);
+            }
+          }
+
+          const dohTasks = [
+            {
+              source: 'cf-doh',
+              url: 'https://cloudflare-dns.com/dns-query?name=o-o.myaddr.l.google.com&type=TXT',
+              options: { headers: { 'Accept': 'application/dns-json' } },
+            },
+            {
+              source: 'google-doh',
+              url: 'https://dns.google/resolve?name=o-o.myaddr.l.google.com&type=TXT',
+              options: {},
+            },
+          ];
+
+          const settled = await Promise.allSettled(
+            dohTasks.map(async (task) => {
+              const res = await fetchWithTimeout(task.url, task.options, 5000);
+              if (!res.ok) throw new Error('HTTP ' + res.status);
+              const data = await res.json();
+              if (!data?.Answer) return;
+              data.Answer.forEach((ans) => {
+                collectIPsFromAnswer(ans.data, task.source);
+              });
+            })
+          );
+
+          settled.forEach((item, idx) => {
+            if (item.status === 'rejected') {
+              pushError(dohTasks[idx].source, item.reason);
+            }
+          });
+
+          if (results.observations.length === 0 && !results.trace?.ip) {
+            results.error = 'DNS 观测失败';
+          }
+
+          return results;
         }
       };
 
@@ -895,6 +1485,9 @@ function renderHtml(initData) {
                   />
                 ))}
               </div>
+
+              {/* --- 泄漏检测区域 --- */}
+              <LeakDetectionSection currentIP={window.CF_DATA.ip} />
 
               <div className="mt-12 pt-8 border-t border-slate-200 dark:border-slate-700 flex flex-col md:flex-row items-center justify-between text-sm text-slate-400 gap-4">
                   <div className="flex items-center gap-2">
