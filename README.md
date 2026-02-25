@@ -38,7 +38,7 @@
 | **IP.SB IPv6** | 纯 IPv6 出口地址 |
 | **IPAPI.is** | 综合 IP 情报平台 |
 | **ChatGPT** | 通过 `chatgpt.com` 的 CDN Trace 检测 |
-| **X.com** | 通过 `x.com` 的 CDN Trace 检测 |
+| **X.com** | 通过 `help.x.com` 的 CDN Trace 检测 |
 | **OpenAI** | 通过 `openai.com` 的 CDN Trace 检测 |
 | **Grok** | 通过 `grok.com` 的 CDN Trace 检测 |
 

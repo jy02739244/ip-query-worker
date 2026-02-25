@@ -4,7 +4,7 @@
 function isValidIpOrDomain(input) {
   if (!input) return false;
   // IPv4
-  const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
+  const ipv4Regex = /^(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d{2}|[1-9]?\d)){3}$/;
   // IPv6（简化版，允许常见格式）
   const ipv6Regex = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/;
   // 域名
