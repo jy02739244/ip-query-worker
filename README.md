@@ -16,7 +16,13 @@
 
 ## 📸 界面预览
 
-![IP 哨兵 - 界面预览](docs/screenshot.png)
+#### ☀️ 日间模式
+
+![IP 哨兵 - 日间模式](docs/screenshot.png)
+
+#### 🌙 夜间模式
+
+![IP 哨兵 - 夜间模式](docs/screenshot-dark.png)
 
 ## ✨ 功能特性
 
@@ -128,7 +134,8 @@ ip-query-worker/
 ├── src/
 │   └── _worker.js       # 核心代码（Worker + React SPA 单文件）
 ├── docs/
-│   └── screenshot.png    # 界面截图
+│   ├── screenshot.png    # 界面截图（日间模式）
+│   └── screenshot-dark.png # 界面截图（夜间模式）
 ├── package.json          # 项目配置 & 依赖
 ├── wrangler.toml         # Cloudflare Workers 配置
 ├── vitest.config.js      # 测试配置
