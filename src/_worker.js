@@ -29,13 +29,24 @@ const SECURITY_HEADERS = {
   'Referrer-Policy': 'strict-origin-when-cross-origin',
 };
 
-// CORS 相关头
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
+// CORS 相关头（限制为同源，避免被第三方站点滥用）
+const CORS_BASE_HEADERS = {
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
   'Access-Control-Max-Age': '86400',
+  'Vary': 'Origin',
 };
+
+function getCorsHeaders(request) {
+  const selfOrigin = new URL(request.url).origin;
+  const requestOrigin = request.headers.get('Origin');
+  const allowOrigin = requestOrigin && requestOrigin === selfOrigin ? requestOrigin : selfOrigin;
+
+  return {
+    ...CORS_BASE_HEADERS,
+    'Access-Control-Allow-Origin': allowOrigin,
+  };
+}
 
 // 32x32 PNG 格式图标（Google Favicon API 不支持 SVG，需要光栅格式）
 // 使用懒加载缓存，避免每次请求都重复解码 base64
@@ -51,12 +62,13 @@ function getFaviconPng() {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const corsHeaders = getCorsHeaders(request);
 
     // 处理 CORS 预检请求
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         status: 204,
-        headers: { ...CORS_HEADERS, ...SECURITY_HEADERS },
+        headers: { ...corsHeaders, ...SECURITY_HEADERS },
       });
     }
 
@@ -84,6 +96,18 @@ export default {
 
     // 处理 API 中转请求
     if (url.pathname === '/api/ipapi') {
+      if (request.method !== 'GET') {
+        return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
+          status: 405,
+          headers: {
+            'content-type': 'application/json;charset=UTF-8',
+            'Allow': 'GET, OPTIONS',
+            ...corsHeaders,
+            ...SECURITY_HEADERS,
+          },
+        });
+      }
+
       const ip = url.searchParams.get('q');
 
       // 输入校验：防止 SSRF 攻击
@@ -92,7 +116,7 @@ export default {
           status: 400,
           headers: {
             'content-type': 'application/json;charset=UTF-8',
-            ...CORS_HEADERS,
+            ...corsHeaders,
             ...SECURITY_HEADERS,
           },
         });
@@ -107,12 +131,25 @@ export default {
           },
         });
 
-        const data = await response.json();
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok) {
+          return new Response(JSON.stringify(data || { error: `上游服务返回错误: HTTP ${response.status}` }), {
+            status: response.status,
+            headers: {
+              'content-type': 'application/json;charset=UTF-8',
+              ...corsHeaders,
+              ...SECURITY_HEADERS,
+            },
+          });
+        }
+
         return new Response(JSON.stringify(data), {
+          status: response.status,
           headers: {
             'content-type': 'application/json;charset=UTF-8',
             'Cache-Control': 'public, max-age=60',
-            ...CORS_HEADERS,
+            ...corsHeaders,
             ...SECURITY_HEADERS,
           },
         });
@@ -121,7 +158,7 @@ export default {
           status: 500,
           headers: {
             'content-type': 'application/json;charset=UTF-8',
-            ...CORS_HEADERS,
+            ...corsHeaders,
             ...SECURITY_HEADERS,
           },
         });
@@ -129,6 +166,18 @@ export default {
     }
 
     if (url.pathname === '/api/cf-trace') {
+      if (request.method !== 'GET') {
+        return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
+          status: 405,
+          headers: {
+            'content-type': 'application/json;charset=UTF-8',
+            'Allow': 'GET, OPTIONS',
+            ...corsHeaders,
+            ...SECURITY_HEADERS,
+          },
+        });
+      }
+
       try {
         const response = await fetch('https://1.1.1.1/cdn-cgi/trace', {
           headers: { 'Accept': 'text/plain' },
@@ -145,7 +194,7 @@ export default {
           headers: {
             'content-type': 'application/json;charset=UTF-8',
             'Cache-Control': 'public, max-age=15',
-            ...CORS_HEADERS,
+            ...corsHeaders,
             ...SECURITY_HEADERS,
           },
         });
@@ -154,7 +203,7 @@ export default {
           status: 502,
           headers: {
             'content-type': 'application/json;charset=UTF-8',
-            ...CORS_HEADERS,
+            ...corsHeaders,
             ...SECURITY_HEADERS,
           },
         });
@@ -200,6 +249,9 @@ function renderHtml(initData) {
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon.png" />
     <link rel="alternate icon" href="/favicon.ico" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&family=Noto+Sans+SC:wght@400;500;700;900&display=swap" rel="stylesheet" />
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -218,12 +270,13 @@ function renderHtml(initData) {
         theme: {
           extend: {
             fontFamily: {
-              sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', '"Helvetica Neue"', 'Arial', '"PingFang SC"', '"Hiragino Sans GB"', '"Microsoft YaHei"', 'sans-serif'],
-              mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', '"Liberation Mono"', '"Courier New"', 'monospace'],
+              sans: ['Outfit', '"Noto Sans SC"', '"PingFang SC"', '"Hiragino Sans GB"', '"Microsoft YaHei"', 'sans-serif'],
+              mono: ['"JetBrains Mono"', '"SF Mono"', 'Consolas', 'monospace'],
             },
             animation: {
               'fade-in': 'fadeIn 0.3s ease-out',
               'slide-up': 'slideUp 0.4s ease-out',
+              float: 'float 6s ease-in-out infinite',
             },
             keyframes: {
               fadeIn: {
@@ -233,6 +286,10 @@ function renderHtml(initData) {
               slideUp: {
                 '0%': { opacity: '0', transform: 'translateY(10px)' },
                 '100%': { opacity: '1', transform: 'translateY(0)' },
+              },
+              float: {
+                '0%, 100%': { transform: 'translateY(0)' },
+                '50%': { transform: 'translateY(-5px)' },
               }
             }
           },
@@ -249,16 +306,137 @@ function renderHtml(initData) {
       })();
     </script>
     <style>
-      body { background-color: #f8fafc; }
-      .dark body, html.dark body { background-color: #0f172a; }
+      :root {
+        --bg: #f4f8ff;
+        --bg-2: #f8f7ff;
+        --surface: rgba(255, 255, 255, 0.82);
+        --surface-strong: rgba(255, 255, 255, 0.96);
+        --line: rgba(14, 116, 144, 0.14);
+        --text-soft: #4b5563;
+        --brand: #0e7490;
+        --brand-2: #0284c7;
+      }
+      html.dark {
+        --bg: #07121d;
+        --bg-2: #101a2d;
+        --surface: rgba(14, 25, 41, 0.74);
+        --surface-strong: rgba(11, 22, 37, 0.94);
+        --line: rgba(56, 189, 248, 0.22);
+        --text-soft: #94a3b8;
+        --brand: #38bdf8;
+        --brand-2: #22d3ee;
+      }
+      body {
+        background:
+          radial-gradient(60rem 60rem at -15% -20%, rgba(34, 211, 238, 0.2), transparent 52%),
+          radial-gradient(52rem 52rem at 120% -10%, rgba(59, 130, 246, 0.18), transparent 46%),
+          linear-gradient(160deg, var(--bg) 0%, var(--bg-2) 100%);
+      }
+      .app-shell {
+        position: relative;
+      }
+      .app-shell:before {
+        content: '';
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0.3;
+        background-image: linear-gradient(rgba(14, 116, 144, 0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(14, 116, 144, 0.05) 1px, transparent 1px);
+        background-size: 30px 30px;
+        mask-image: radial-gradient(circle at 40% 20%, black 20%, transparent 80%);
+      }
+      .surface-card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        box-shadow: 0 10px 30px rgba(14, 116, 144, 0.08);
+        backdrop-filter: blur(9px);
+      }
+      .surface-strong {
+        background: var(--surface-strong);
+        border: 1px solid var(--line);
+      }
+      .title-gradient {
+        background: linear-gradient(95deg, #0e7490 0%, #0369a1 55%, #14b8a6 100%);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .app-orb {
+        position: absolute;
+        border-radius: 9999px;
+        filter: blur(46px);
+        pointer-events: none;
+        z-index: 0;
+      }
+      .app-orb-1 {
+        width: 220px;
+        height: 220px;
+        top: 90px;
+        left: -70px;
+        background: rgba(34, 211, 238, 0.22);
+      }
+      .app-orb-2 {
+        width: 240px;
+        height: 240px;
+        top: 200px;
+        right: -90px;
+        background: rgba(56, 189, 248, 0.2);
+      }
+      .hero-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
+        border-radius: 9999px;
+        border: 1px solid rgba(14, 116, 144, 0.16);
+        background: rgba(255, 255, 255, 0.7);
+        font-size: 12px;
+        color: #0f766e;
+      }
+      html.dark .hero-chip {
+        background: rgba(15, 23, 42, 0.6);
+        border-color: rgba(56, 189, 248, 0.25);
+        color: #67e8f9;
+      }
+      .ip-addr {
+        word-break: break-all;
+        overflow-wrap: anywhere;
+        line-height: 1.62;
+        letter-spacing: 0.01em;
+      }
+      .ip-addr-inline {
+        display: block;
+        max-width: 100%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        line-height: 1.28;
+      }
+      .ip-v6-wrap {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        line-height: 1.08;
+        letter-spacing: 0.008em;
+        max-width: 100%;
+        width: 100%;
+      }
+      .ip-v6-line {
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        width: 100%;
+      }
       .scrollbar-hide::-webkit-scrollbar { display: none; }
       .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
       ::-webkit-scrollbar { width: 8px; height: 8px; }
       ::-webkit-scrollbar-track { background: transparent; }
-      ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
-      ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
-      .dark ::-webkit-scrollbar-thumb { background: #475569; }
-      .dark ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+      ::-webkit-scrollbar-thumb { background: #67b8d1; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: #2f94b6; }
+      .dark ::-webkit-scrollbar-thumb { background: #236a86; }
+      .dark ::-webkit-scrollbar-thumb:hover { background: #38bdf8; }
     </style>
   </head>
   <body>
@@ -279,7 +457,7 @@ function renderHtml(initData) {
       const Moon = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>;
 
       const RefreshCcw = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 2v6h6"></path><path d="M21 12A9 9 0 0 0 6 5.3L3 8"></path><path d="M21 22v-6h-6"></path><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"></path></svg>;
-      const ExternalLink = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>;
+      const ExternalLink = ({ className = 'w-4 h-4' }) => <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" className={className} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>;
       // WiFi 图标（WebRTC 探测）
       const Wifi = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h.01"></path><path d="M2 8.82a15 15 0 0 1 20 0"></path><path d="M5 12.859a10 10 0 0 1 14 0"></path><path d="M8.5 16.429a5 5 0 0 1 7 0"></path></svg>;
       // DNS 图标
@@ -438,7 +616,7 @@ function renderHtml(initData) {
         return (
           <button
             onClick={toggleTheme}
-            className="p-2 rounded-lg text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all duration-200"
+            className="p-2 rounded-xl text-cyan-700 hover:text-cyan-900 dark:text-cyan-300 dark:hover:text-cyan-100 hover:bg-cyan-50 dark:hover:bg-cyan-900/40 transition-all duration-200 border border-cyan-100 dark:border-cyan-900/40"
             aria-label={isDark ? '切换到白天模式' : '切换到夜间模式'}
             title={isDark ? '切换到白天模式' : '切换到夜间模式'}
           >
@@ -448,9 +626,74 @@ function renderHtml(initData) {
       };
 
       // --- 组件 ---
+      const SOURCE_TONE = {
+        current: {
+          badge: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-200',
+          text: 'text-cyan-700 dark:text-cyan-300',
+          glow: 'from-cyan-500/30 to-sky-500/5'
+        },
+        ipv4: {
+          badge: 'bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-200',
+          text: 'text-sky-700 dark:text-sky-300',
+          glow: 'from-sky-500/30 to-blue-500/5'
+        },
+        ipv6: {
+          badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-200',
+          text: 'text-blue-700 dark:text-blue-300',
+          glow: 'from-blue-500/30 to-indigo-500/5'
+        },
+        ipapi: {
+          badge: 'bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-200',
+          text: 'text-teal-700 dark:text-teal-300',
+          glow: 'from-teal-500/30 to-cyan-500/5'
+        },
+      };
+
+      const getSourceTone = (id) => SOURCE_TONE[id] || {
+        badge: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200',
+        text: 'text-cyan-700 dark:text-cyan-300',
+        glow: 'from-cyan-500/25 to-sky-500/5'
+      };
+
+      const isIPv6Address = (value) => typeof value === 'string' && value.includes(':');
+
+      const splitIPv6ForDisplay = (ip) => {
+        const value = String(ip || '');
+        if (!value.includes(':')) return [value, ''];
+
+        const middle = Math.floor(value.length / 2);
+        let splitAt = value.indexOf(':', middle);
+        if (splitAt <= 0 || splitAt >= value.length - 1) {
+          splitAt = value.lastIndexOf(':', middle);
+        }
+        if (splitAt <= 0 || splitAt >= value.length - 1) {
+          return [value, ''];
+        }
+
+        return [value.slice(0, splitAt + 1), value.slice(splitAt + 1)];
+      };
+
+      const CardIpText = ({ ip, toneText }) => {
+        if (isIPv6Address(ip)) {
+          const [line1, line2] = splitIPv6ForDisplay(ip);
+          return (
+            <div className={'h-12 px-1 ip-v6-wrap ' + toneText}>
+              <div className="ip-v6-line text-[0.8rem] sm:text-[0.85rem] font-mono font-semibold">{line1}</div>
+              <div className="ip-v6-line text-[0.8rem] sm:text-[0.85rem] font-mono font-semibold">{line2}</div>
+            </div>
+          );
+        }
+
+        return (
+          <div className={'h-12 flex items-center justify-center ip-addr-inline text-xl sm:text-2xl font-mono font-bold ' + toneText}>
+            {ip}
+          </div>
+        );
+      };
+
       const SectionTitle = ({ icon: Icon, title }) => (
         <div className="flex items-center gap-2 mb-3 text-slate-800 dark:text-slate-200 pb-2 border-b border-slate-100 dark:border-slate-700">
-            <Icon className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+            <Icon className="w-5 h-5 text-cyan-600 dark:text-cyan-300" />
             <h3 className="font-bold text-base">{title}</h3>
         </div>
       );
@@ -545,7 +788,7 @@ function renderHtml(initData) {
                   <div className="space-y-1">
                       <div className="flex flex-col sm:flex-row justify-between py-2 border-b border-slate-50 dark:border-slate-700">
                           <span className="text-slate-500 text-sm font-medium">IP 地址</span>
-                          <span className="text-lg font-mono font-bold text-slate-900 dark:text-slate-100 break-all text-right">{data.ip}</span>
+                          <span className="ip-addr text-lg font-mono font-bold text-slate-900 dark:text-slate-100 text-right">{data.ip}</span>
                       </div>
                       <InfoItem label="区域注册机构" value={data.rir || '未知'} highlight />
                       <InfoItem
@@ -681,28 +924,36 @@ function renderHtml(initData) {
       };
 
       const StatusCard = ({ data, onViewDetails, onRetry }) => {
-        const { sourceName, sourceUrl, sourceIcon, ip, isp, countryCode, countryName, isLoading, error } = data;
+        const { id, sourceName, sourceUrl, sourceIcon, ip, isp, countryCode, countryName, isLoading, error } = data;
+        const tone = getSourceTone(id);
 
         return (
-          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 hover:shadow-md transition-shadow duration-200 overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-slate-50 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+          <div className="surface-card group rounded-2xl hover:-translate-y-1 hover:shadow-xl transition-all duration-300 overflow-hidden flex flex-col relative">
+            <div className={'absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity bg-gradient-to-br ' + tone.glow}></div>
+            <div className="relative p-4 border-b border-cyan-100/70 dark:border-cyan-900/50 bg-gradient-to-r from-cyan-50/80 to-sky-50/60 dark:from-cyan-900/30 dark:to-slate-900/20 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 {sourceIcon ? (
                   <img src={sourceIcon} alt={sourceName} className="w-5 h-5 rounded-md object-cover" />
                 ) : (
-                  <div className="w-5 h-5 rounded-md bg-indigo-100 text-indigo-600 flex items-center justify-center font-bold text-xs">
+                  <div className={'w-5 h-5 rounded-md flex items-center justify-center font-bold text-xs ' + tone.badge}>
                     {sourceName.substring(0, 2).toUpperCase()}
                   </div>
                 )}
                 <h3 className="font-semibold text-slate-800 dark:text-slate-200 text-sm">{sourceName}</h3>
-                <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-indigo-500 transition">
-                    <ExternalLink className="w-3.5 h-3.5" />
+                <a
+                  href={sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={sourceName + ' 外链'}
+                  className="opacity-50 group-hover:opacity-100 ml-1 inline-flex items-center justify-center w-6 h-6 rounded-full text-slate-500 hover:text-cyan-600 dark:text-slate-400 dark:hover:text-cyan-300 hover:bg-cyan-100/50 dark:hover:bg-cyan-800/50 transition-all duration-300 hover:scale-110"
+                >
+                    <ExternalLink className="w-4 h-4 ml-0.5 mb-0.5" />
                 </a>
               </div>
-              {isLoading && <RefreshCcw className="w-4 h-4 text-indigo-400 animate-spin" />}
+              {isLoading && <RefreshCcw className="w-4 h-4 text-cyan-500 animate-spin" />}
             </div>
 
-            <div className="p-5 flex-1 flex flex-col justify-center">
+            <div className="relative p-5 flex-1 flex flex-col justify-center">
               {error ? (
                 <div className="text-center">
                   <p className="text-red-500 text-sm mb-2">{error}</p>
@@ -717,23 +968,27 @@ function renderHtml(initData) {
                 </div>
               ) : (
                 <div className="text-center">
-                  <div className="group relative inline-block cursor-pointer" onClick={() => onViewDetails(ip)}>
-                      <div className="text-xl sm:text-2xl font-mono font-bold text-indigo-600 hover:text-indigo-700 transition-colors break-all">
-                          {ip}
-                      </div>
-                      <div className="text-xs text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity absolute -bottom-4 left-1/2 transform -translate-x-1/2 whitespace-nowrap">点击查看详情</div>
-                  </div>
+                   <div className="group relative inline-block cursor-pointer" onClick={() => onViewDetails(ip)}>
+                       <div title={ip} className="hover:text-cyan-900 dark:hover:text-cyan-200 transition-colors max-w-full">
+                         <CardIpText ip={ip} toneText={tone.text} />
+                       </div>
+                       <div className="text-xs text-cyan-500 opacity-0 group-hover:opacity-100 transition-opacity absolute -bottom-4 left-1/2 transform -translate-x-1/2 whitespace-nowrap">点击查看详情</div>
+                   </div>
 
-                  <div className="mt-4 flex items-center justify-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                  <div className="mt-3 h-7 flex items-center justify-center gap-2 text-sm text-slate-600 dark:text-slate-300">
                       <span className="text-xl">{getFlagEmoji(countryCode)}</span>
                       <span className="font-medium">{countryName || '未知位置'}</span>
                   </div>
 
-                  {isp && isp !== '-' && (
-                      <div className="mt-2 text-xs text-slate-400 font-medium px-2 py-1 bg-slate-50 dark:bg-slate-700 rounded-lg inline-block max-w-full truncate">
-                          {isp}
+                  <div className="mt-1 h-7 flex items-center justify-center">
+                    {isp && isp !== '-' ? (
+                      <div className="text-xs text-slate-400 font-medium px-2 py-1 bg-slate-50 dark:bg-slate-700 rounded-lg inline-block max-w-full truncate">
+                        {isp}
                       </div>
-                  )}
+                    ) : (
+                      <div className="text-xs text-slate-300 dark:text-slate-600">-</div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -745,20 +1000,20 @@ function renderHtml(initData) {
       const LeakDetectionCard = ({ icon: Icon, title, isLoading, status, statusText, children }) => {
         // status: 'safe' | 'leak' | 'unknown' | 'unsupported'
         const statusConfig = {
-          safe: { bg: 'bg-emerald-50 dark:bg-emerald-900/20', border: 'border-emerald-200 dark:border-emerald-800', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400', icon: '✅' },
-          leak: { bg: 'bg-red-50 dark:bg-red-900/20', border: 'border-red-200 dark:border-red-800', badge: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400', icon: '⚠️' },
-          unknown: { bg: 'bg-slate-50 dark:bg-slate-800', border: 'border-slate-200 dark:border-slate-700', badge: 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400', icon: '❓' },
-          unsupported: { bg: 'bg-slate-50 dark:bg-slate-800', border: 'border-slate-200 dark:border-slate-700', badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400', icon: '🚫' },
+          safe: { bg: 'bg-emerald-50/70 dark:bg-emerald-900/20', border: 'border-emerald-200/80 dark:border-emerald-800/60', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400', icon: '✅' },
+          leak: { bg: 'bg-rose-50/70 dark:bg-rose-900/20', border: 'border-rose-200/80 dark:border-rose-800/60', badge: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-400', icon: '⚠️' },
+          unknown: { bg: 'bg-cyan-50/40 dark:bg-slate-800/80', border: 'border-cyan-200/70 dark:border-cyan-900/50', badge: 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400', icon: '❓' },
+          unsupported: { bg: 'bg-slate-50/80 dark:bg-slate-800', border: 'border-slate-200 dark:border-slate-700', badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400', icon: '🚫' },
         };
         const cfg = statusConfig[status] || statusConfig.unknown;
 
         return (
-          <div className={'rounded-xl shadow-sm border ' + cfg.border + ' ' + cfg.bg + ' overflow-hidden transition-all duration-300'}>
+          <div className={'rounded-2xl shadow-sm border ' + cfg.border + ' ' + cfg.bg + ' overflow-hidden transition-all duration-300 hover:shadow-lg'}>
             <div className="p-4 border-b border-slate-100 dark:border-slate-700/50 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <div className="bg-indigo-100 dark:bg-indigo-900/40 p-1.5 rounded-lg text-indigo-600 dark:text-indigo-400">
-                  <Icon className="w-4 h-4" />
-                </div>
+                <div className="bg-cyan-100 dark:bg-cyan-900/40 p-1.5 rounded-lg text-cyan-700 dark:text-cyan-300">
+                    <Icon className="w-4 h-4" />
+                  </div>
                 <h3 className="font-semibold text-slate-800 dark:text-slate-200 text-sm">{title}</h3>
               </div>
               {isLoading ? (
@@ -877,10 +1132,41 @@ function renderHtml(initData) {
           const msg = String(message || '未知错误');
           const lower = msg.toLowerCase();
           if (lower.includes('aborterror') || lower.includes('timed out') || lower.includes('timeout')) return '请求超时';
+          if (lower.includes('aborted without reason') || lower.includes('signal is aborted')) return '请求被中止（可能超时或被拦截）';
           if (lower.includes('cors')) return '跨域访问被拦截';
           if (lower.includes('failed to fetch') || lower.includes('networkerror') || lower.includes('connection') || lower.includes('reset')) return '网络连接失败或被拦截';
           if (lower.includes('http ')) return '服务端返回错误（' + msg + '）';
           return msg;
+        };
+
+        const getObserverSourceLabel = (source) => {
+          const map = {
+            'browser-trace': '浏览器 Trace',
+            'worker-trace': 'Worker Trace',
+            'cf-doh': 'Cloudflare DoH',
+            'google-doh': 'Google DoH',
+            'dns-observer': 'DNS 观测器',
+          };
+          return map[source] || source;
+        };
+
+        const getComparisonTag = (candidateIP) => {
+          if (!currentIP || !candidateIP) {
+            return {
+              text: '无参考',
+              className: 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'
+            };
+          }
+          if (candidateIP === currentIP) {
+            return {
+              text: '✓ 一致',
+              className: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300'
+            };
+          }
+          return {
+            text: '↗ 不同出口',
+            className: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+          };
         };
 
         const webrtcStatus = getWebRTCStatus();
@@ -927,7 +1213,15 @@ function renderHtml(initData) {
               >
                 {webrtc.data && !webrtc.data.supported ? (
                   <div className="text-center py-4">
-                    <p className="text-slate-500 dark:text-slate-400 text-sm">{webrtc.data.error || '浏览器不支持或已禁用 WebRTC'}</p>
+                    <div className="rounded-xl border border-amber-200/80 dark:border-amber-900/60 bg-amber-50/80 dark:bg-amber-900/20 px-3 py-2 text-left max-w-md mx-auto">
+                      <p className="text-amber-700 dark:text-amber-300 text-sm font-medium">{formatObserverError(webrtc.data.error || '浏览器不支持或已禁用 WebRTC')}</p>
+                      {webrtc.data.error && (
+                        <details className="mt-2">
+                          <summary className="cursor-pointer text-xs text-amber-700/80 dark:text-amber-300/80">查看原始详情</summary>
+                          <div className="mt-1 text-[11px] font-mono break-all text-amber-800/80 dark:text-amber-200/80">{webrtc.data.error}</div>
+                        </details>
+                      )}
+                    </div>
                     <p className="text-xs text-slate-400 dark:text-slate-500 mt-2">无法通过 WebRTC 泄漏 IP 地址</p>
                   </div>
                 ) : webrtc.data ? (
@@ -938,10 +1232,9 @@ function renderHtml(initData) {
                       {webrtc.data.publicIPs.length > 0 ? (
                         <div className="mt-1 space-y-1">
                           {webrtc.data.publicIPs.map((ip, i) => (
-                            <div key={i} className={'flex items-center gap-2 text-sm font-mono py-1 px-2 rounded ' + (ip === currentIP ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400' : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400')}>
-                              <span>{ip}</span>
-                              {ip === currentIP && <span className="text-xs font-sans">✓ 与 Worker 一致</span>}
-                              {ip !== currentIP && <span className="text-xs font-sans">≠ 可能为不同出口</span>}
+                            <div key={i} className={'flex flex-wrap items-center gap-2 text-sm font-mono py-1.5 px-2 rounded ' + (ip === currentIP ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400' : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400')}>
+                              <span className="break-all leading-relaxed">{ip}</span>
+                              <span className={'text-[11px] font-sans px-2 py-0.5 rounded-full font-semibold ' + getComparisonTag(ip).className}>{getComparisonTag(ip).text}</span>
                             </div>
                           ))}
                           <p className="text-xs text-slate-400 dark:text-slate-500 mt-1 leading-relaxed">使用分流代理时，STUN 出口 IP 与 Worker 连接 IP 不同可能是正常现象，不能单独作为泄漏结论。</p>
@@ -970,7 +1263,7 @@ function renderHtml(initData) {
                     <div className="pt-2 border-t border-slate-100 dark:border-slate-700/50">
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-slate-400">当前连接 IP（参考）</span>
-                        <span className="font-mono text-slate-600 dark:text-slate-300">{currentIP}</span>
+                        <span className="ip-addr font-mono text-slate-600 dark:text-slate-300 text-right">{currentIP}</span>
                       </div>
                     </div>
                   </div>
@@ -991,12 +1284,11 @@ function renderHtml(initData) {
                     {dns.data.trace?.ip && (
                       <div>
                         <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">Cloudflare Trace 出口 IP</span>
-                        <div className={'mt-1 flex items-center gap-2 text-sm font-mono py-1 px-2 rounded ' + (dns.data.trace.ip === currentIP ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400' : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400')}>
-                          <span>{dns.data.trace.ip}</span>
+                        <div className={'mt-1 flex flex-wrap items-center gap-2 text-sm font-mono py-1.5 px-2 rounded ' + (dns.data.trace.ip === currentIP ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400' : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400')}>
+                          <span className="break-all leading-relaxed">{dns.data.trace.ip}</span>
                           {dns.data.trace.location && <span className="text-xs font-sans">({getFlagEmoji(dns.data.trace.location)} {dns.data.trace.location})</span>}
                           {dns.data.trace.source && <span className="text-xs font-sans opacity-80">[{dns.data.trace.source}]</span>}
-                          {dns.data.trace.ip !== currentIP && <span className="text-xs font-sans">≠ 与 Worker 不同</span>}
-                          {dns.data.trace.ip === currentIP && <span className="text-xs font-sans">✓ 一致</span>}
+                          <span className={'text-[11px] font-sans px-2 py-0.5 rounded-full font-semibold ' + getComparisonTag(dns.data.trace.ip).className}>{getComparisonTag(dns.data.trace.ip).text}</span>
                         </div>
                       </div>
                     )}
@@ -1006,12 +1298,13 @@ function renderHtml(initData) {
                       {dns.data.observations?.length > 0 ? (
                         <div className="mt-1 space-y-1">
                           {dns.data.observations.map((obs, i) => (
-                            <div key={i} className={'text-sm py-1 px-2 rounded font-mono ' + ((obs.kind === 'resolver-observed' && obs.value === currentIP) ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400' : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400')}>
-                              <span>{obs.value}</span>
+                            <div key={i} className={'text-sm py-1.5 px-2 rounded font-mono flex flex-wrap items-center gap-2 ' + ((obs.kind === 'resolver-observed' && obs.value === currentIP) ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400' : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400')}>
+                              <span className="break-all leading-relaxed">{obs.value}</span>
                               <span className="text-xs font-sans ml-2 opacity-80">[{obs.source}]</span>
-                              {obs.kind === 'ecs-subnet' && <span className="text-xs font-sans ml-2">(ECS 子网)</span>}
-                              {obs.kind === 'resolver-observed' && obs.value === currentIP && <span className="text-xs font-sans ml-2">✓ 一致</span>}
-                              {obs.kind === 'resolver-observed' && obs.value !== currentIP && <span className="text-xs font-sans ml-2">≠ 可能为不同出口</span>}
+                              {obs.kind === 'ecs-subnet' && <span className="text-xs font-sans">(ECS 子网)</span>}
+                              {obs.kind === 'resolver-observed' && (
+                                <span className={'text-[11px] font-sans px-2 py-0.5 rounded-full font-semibold ' + getComparisonTag(obs.value).className}>{getComparisonTag(obs.value).text}</span>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -1024,9 +1317,12 @@ function renderHtml(initData) {
                         <span className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">观测错误</span>
                         <div className="mt-1 space-y-1">
                           {dns.data.errors.map((err, i) => (
-                            <div key={i} className="text-xs py-1 px-2 rounded bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400">
-                              [{err.source}] {formatObserverError(err.message)}
-                            </div>
+                            <details key={i} className="rounded-xl border border-amber-200/80 dark:border-amber-900/60 bg-amber-50/80 dark:bg-amber-900/20 px-3 py-2">
+                              <summary className="cursor-pointer text-sm font-medium text-amber-700 dark:text-amber-300">
+                                [{getObserverSourceLabel(err.source)}] {formatObserverError(err.message)}
+                              </summary>
+                              <div className="mt-2 text-[11px] font-mono break-all text-amber-800/80 dark:text-amber-200/80">{String(err.message || '未知错误')}</div>
+                            </details>
                           ))}
                         </div>
                       </div>
@@ -1036,7 +1332,7 @@ function renderHtml(initData) {
                     <div className="pt-2 border-t border-slate-100 dark:border-slate-700/50">
                       <div className="flex items-center justify-between text-xs">
                         <span className="text-slate-400">当前连接 IP（参考）</span>
-                        <span className="font-mono text-slate-600 dark:text-slate-300">{currentIP}</span>
+                        <span className="ip-addr font-mono text-slate-600 dark:text-slate-300 text-right">{currentIP}</span>
                       </div>
                     </div>
                   </div>
@@ -1110,7 +1406,7 @@ function renderHtml(initData) {
         },
         // 详情查询 (使用 Worker 中转)
         fetchIpDetails: async (ip) => {
-          const res = await fetchWithTimeout(\`/api/ipapi?q=\${ip}\`);
+          const res = await fetchWithTimeout(\`/api/ipapi?q=\${encodeURIComponent(ip)}\`);
           if (!res.ok) throw new Error('详情查询失败');
           return await res.json();
         },
@@ -1297,9 +1593,8 @@ function renderHtml(initData) {
             const text = await traceRes.text();
             const traceIP = text.match(/ip=([^\\n]+)/)?.[1] || null;
             const traceLocation = text.match(/loc=([^\\n]+)/)?.[1] || null;
-            if (traceIP) {
-              results.trace = { ip: traceIP, location: traceLocation, source: 'browser-trace' };
-            }
+            if (!traceIP) throw new Error('Trace response missing ip');
+            results.trace = { ip: traceIP, location: traceLocation, source: 'browser-trace' };
           };
 
           const fetchTraceFromWorker = async () => {
@@ -1308,9 +1603,8 @@ function renderHtml(initData) {
             const data = await traceRes.json();
             const traceIP = data?.ip || null;
             const traceLocation = data?.location || null;
-            if (traceIP) {
-              results.trace = { ip: traceIP, location: traceLocation, source: 'worker-trace' };
-            }
+            if (!traceIP) throw new Error('Trace response missing ip');
+            results.trace = { ip: traceIP, location: traceLocation, source: 'worker-trace' };
           };
 
           try {
@@ -1411,6 +1705,10 @@ function renderHtml(initData) {
         const [detailLoading, setDetailLoading] = useState(false);
         const [detailError, setDetailError] = useState(null);
 
+        const readyCount = rows.filter((row) => !row.isLoading && !row.error).length;
+        const errorCount = rows.filter((row) => !!row.error).length;
+        const countryCount = new Set(rows.map((row) => row.countryCode).filter(Boolean)).size;
+
         const updateRow = useCallback((id, data) => {
           setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...data, isLoading: false } : row)));
         }, []);
@@ -1444,57 +1742,72 @@ function renderHtml(initData) {
         };
 
         return (
-          <div className="min-h-screen bg-slate-50 dark:bg-slate-900 font-sans text-slate-900 dark:text-slate-100 transition-colors duration-300">
-            <header className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 sticky top-0 z-30 bg-opacity-80 dark:bg-opacity-80 backdrop-blur-md">
-              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <div className="app-shell min-h-screen font-sans text-slate-900 dark:text-slate-100 transition-colors duration-300">
+            <div className="app-orb app-orb-1"></div>
+            <div className="app-orb app-orb-2"></div>
+            <header className="surface-card border-b border-cyan-100/80 dark:border-cyan-900/50 sticky top-0 z-30 bg-opacity-85 dark:bg-opacity-85 backdrop-blur-xl">
+              <div className="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="bg-indigo-600 p-1.5 rounded-lg text-white shadow-sm shadow-indigo-200 dark:shadow-indigo-900">
+                  <div className="bg-gradient-to-br from-cyan-500 to-sky-600 p-1.5 rounded-xl text-white shadow-sm shadow-cyan-300/50 dark:shadow-cyan-900/40 animate-float">
                       <ShieldCheck className="w-6 h-6" />
                   </div>
-                  <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">IP 哨兵</h1>
+                  <h1 className="text-xl font-extrabold text-slate-900 dark:text-white tracking-tight">IP 哨兵</h1>
                 </div>
                 <div className="flex items-center gap-2">
                    <ThemeToggle />
-                   <a href="https://github.com/jy02739244/ip-query-worker" target="_blank" rel="noreferrer" className="text-slate-400 hover:text-slate-800 dark:hover:text-white transition">
-                      <Github className="w-5 h-5" />
-                   </a>
-                </div>
+                    <a href="https://github.com/jy02739244/ip-query-worker" target="_blank" rel="noreferrer" className="text-slate-500 hover:text-cyan-700 dark:hover:text-cyan-300 transition">
+                       <Github className="w-5 h-5" />
+                    </a>
+                 </div>
               </div>
             </header>
 
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-              <div className="mb-8 text-center md:text-left">
-                  <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-2">网络身份分析</h2>
-                  <p className="text-slate-500 dark:text-slate-400 max-w-2xl">
+            <main className="relative z-10 py-6">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div className="mb-5 text-center md:text-left surface-strong rounded-3xl p-5 md:p-6">
+                <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-5">
+                  <div>
+                    <h2 className="text-lg md:text-xl font-bold mb-1.5 title-gradient">网络身份分析</h2>
+                    <p className="text-slate-600 dark:text-slate-300 max-w-2xl leading-relaxed">
                       分析各服务商下的连接可见性。检测 IP 暴露情况，通过实时风控评分检查代理/VPN 泄漏。
-                  </p>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                {rows.map((row) => (
-                  <StatusCard
-                    key={row.id}
-                    data={row}
-                    onViewDetails={handleViewDetails}
-                    onRetry={() => {
-                        const fetchFn = FETCH_MAP[row.id];
-                        if (!fetchFn) return; // 'current' 无需重试
-                        updateRow(row.id, { isLoading: true, error: undefined });
-                        fetchFn().then(d => updateRow(row.id, d));
-                    }}
-                  />
-                ))}
-              </div>
-
-              {/* --- 泄漏检测区域 --- */}
-              <LeakDetectionSection currentIP={window.CF_DATA.ip} />
-
-              <div className="mt-12 pt-8 border-t border-slate-200 dark:border-slate-700 flex flex-col md:flex-row items-center justify-between text-sm text-slate-400 gap-4">
-                  <div className="flex items-center gap-2">
-                      <Globe className="w-4 h-4" />
-                      <span>基于 Cloudflare & React 构建</span>
+                    </p>
                   </div>
-                  <div>数据源包括 ipapi.is, ip.sb 等。</div>
+                  <div className="flex flex-wrap justify-center md:justify-end gap-2">
+                    <span className="hero-chip">已就绪: {readyCount}</span>
+                    <span className="hero-chip">异常: {errorCount}</span>
+                    <span className="hero-chip">地区数: {countryCount}</span>
+                  </div>
+                </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  {rows.map((row) => (
+                    <StatusCard
+                      key={row.id}
+                      data={row}
+                      onViewDetails={handleViewDetails}
+                      onRetry={() => {
+                          const fetchFn = FETCH_MAP[row.id];
+                          if (!fetchFn) return; // 'current' 无需重试
+                          updateRow(row.id, { isLoading: true, error: undefined });
+                          fetchFn().then(d => updateRow(row.id, d));
+                      }}
+                    />
+                  ))}
+                </div>
+
+                {/* --- 泄漏检测区域 --- */}
+                <div className="surface-strong rounded-3xl p-5 md:p-6 mt-8">
+                  <LeakDetectionSection currentIP={window.CF_DATA.ip} />
+                </div>
+
+                <div className="mt-12 pt-8 border-t border-cyan-100 dark:border-cyan-900/50 flex flex-col md:flex-row items-center justify-between text-sm text-slate-500 dark:text-slate-400 gap-4">
+                    <div className="flex items-center gap-2">
+                        <Globe className="w-4 h-4" />
+                        <span>基于 Cloudflare & React 构建</span>
+                    </div>
+                    <div>数据源包括 ipapi.is, ip.sb 等。</div>
+                </div>
               </div>
             </main>
 
