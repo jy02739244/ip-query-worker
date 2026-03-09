@@ -409,6 +409,12 @@ function renderHtml(initData) {
         --surface: rgba(255, 255, 255, 0.76);
         --surface-strong: rgba(255, 255, 255, 0.88);
         --surface-tint: rgba(245, 247, 250, 0.82);
+        --surface-top: rgba(255, 255, 255, 0.78);
+        --surface-top-strong: rgba(255, 255, 255, 0.92);
+        --surface-border: rgba(255, 255, 255, 0.56);
+        --surface-border-strong: rgba(255, 255, 255, 0.58);
+        --surface-highlight: rgba(255, 255, 255, 0.3);
+        --surface-highlight-strong: rgba(255, 255, 255, 0.44);
         --line: rgba(15, 23, 42, 0.08);
         --line-strong: rgba(99, 102, 241, 0.18);
         --text-soft: #5f6b7a;
@@ -419,6 +425,7 @@ function renderHtml(initData) {
         --lux-soft: rgba(107, 124, 255, 0.14);
         --shadow-soft: 0 18px 48px rgba(15, 23, 42, 0.08);
         --shadow-strong: 0 26px 70px rgba(15, 23, 42, 0.12);
+        --surface-glare: linear-gradient(135deg, rgba(255, 255, 255, 0.18), transparent 38%, transparent 72%, var(--lux-soft));
       }
       html.dark {
         --bg: #070b13;
@@ -426,6 +433,12 @@ function renderHtml(initData) {
         --surface: rgba(11, 17, 28, 0.78);
         --surface-strong: rgba(9, 13, 22, 0.9);
         --surface-tint: rgba(10, 16, 28, 0.86);
+        --surface-top: rgba(18, 26, 43, 0.94);
+        --surface-top-strong: rgba(12, 18, 31, 0.98);
+        --surface-border: rgba(148, 163, 184, 0.14);
+        --surface-border-strong: rgba(148, 163, 184, 0.16);
+        --surface-highlight: rgba(255, 255, 255, 0.045);
+        --surface-highlight-strong: rgba(255, 255, 255, 0.06);
         --line: rgba(148, 163, 184, 0.12);
         --line-strong: rgba(129, 140, 248, 0.22);
         --text-soft: #93a1b5;
@@ -436,9 +449,16 @@ function renderHtml(initData) {
         --lux-soft: rgba(142, 160, 255, 0.14);
         --shadow-soft: 0 22px 58px rgba(2, 8, 23, 0.42);
         --shadow-strong: 0 30px 78px rgba(2, 8, 23, 0.34);
+        --surface-glare: linear-gradient(145deg, rgba(255, 255, 255, 0.05), transparent 40%, transparent 72%, rgba(142, 160, 255, 0.08));
       }
       html.dark body {
         color-scheme: dark;
+        background:
+          radial-gradient(56rem 56rem at -12% -18%, rgba(96, 165, 250, 0.16), transparent 50%),
+          radial-gradient(46rem 46rem at 118% -6%, rgba(129, 140, 248, 0.14), transparent 42%),
+          radial-gradient(38rem 38rem at 50% 112%, rgba(15, 23, 42, 0.22), transparent 60%),
+          linear-gradient(160deg, var(--bg) 0%, var(--bg-2) 100%);
+        background-attachment: fixed;
       }
       body {
         min-height: 100vh;
@@ -459,6 +479,12 @@ function renderHtml(initData) {
           radial-gradient(circle at 80% 8%, rgba(255, 255, 255, 0.24), transparent 14%);
         opacity: 0.28;
       }
+      html.dark body:before {
+        background:
+          radial-gradient(circle at 20% 18%, rgba(129, 140, 248, 0.16), transparent 18%),
+          radial-gradient(circle at 80% 8%, rgba(56, 189, 248, 0.12), transparent 14%);
+        opacity: 0.42;
+      }
       .app-shell {
         position: relative;
         isolation: isolate;
@@ -473,27 +499,26 @@ function renderHtml(initData) {
         background-size: 30px 30px;
         mask-image: radial-gradient(circle at 40% 20%, black 20%, transparent 80%);
       }
+      html.dark .app-shell:before {
+        opacity: 0.24;
+        background-image: linear-gradient(rgba(129, 140, 248, 0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(129, 140, 248, 0.08) 1px, transparent 1px);
+      }
       .surface-card {
         position: relative;
         overflow: hidden;
         isolation: isolate;
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), var(--surface));
-        border: 1px solid rgba(255, 255, 255, 0.56);
-        box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+        background: linear-gradient(180deg, var(--surface-top), var(--surface));
+        border: 1px solid var(--surface-border);
+        box-shadow: var(--shadow-soft), inset 0 1px 0 var(--surface-highlight);
         backdrop-filter: blur(24px) saturate(160%);
       }
       .surface-strong {
         position: relative;
         overflow: hidden;
         isolation: isolate;
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), var(--surface-tint));
-        border: 1px solid rgba(255, 255, 255, 0.58);
-        box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255, 255, 255, 0.44);
-      }
-      html.dark .surface-card,
-      html.dark .surface-strong {
-        border-color: rgba(255, 255, 255, 0.07);
-        box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+        background: linear-gradient(180deg, var(--surface-top-strong), var(--surface-tint));
+        border: 1px solid var(--surface-border-strong);
+        box-shadow: var(--shadow-soft), inset 0 1px 0 var(--surface-highlight-strong);
       }
       .surface-card:after,
       .surface-strong:after {
@@ -501,7 +526,7 @@ function renderHtml(initData) {
         position: absolute;
         inset: 0;
         pointer-events: none;
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.18), transparent 38%, transparent 72%, var(--lux-soft));
+        background: var(--surface-glare);
       }
       .header-shell {
         background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.54));
@@ -555,6 +580,12 @@ function renderHtml(initData) {
         right: -90px;
         background: rgba(99, 102, 241, 0.12);
       }
+      html.dark .app-orb-1 {
+        background: rgba(96, 165, 250, 0.12);
+      }
+      html.dark .app-orb-2 {
+        background: rgba(129, 140, 248, 0.12);
+      }
       .hero-chip {
         display: inline-flex;
         align-items: center;
@@ -570,10 +601,10 @@ function renderHtml(initData) {
         color: #556274;
       }
       html.dark .hero-chip {
-        background: linear-gradient(180deg, rgba(15, 23, 42, 0.8), rgba(15, 23, 42, 0.62));
-        border-color: rgba(255, 255, 255, 0.08);
-        box-shadow: 0 12px 30px rgba(2, 8, 23, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-        color: #cbd5e1;
+        background: linear-gradient(180deg, rgba(18, 26, 42, 0.84), rgba(10, 15, 26, 0.7));
+        border-color: rgba(129, 140, 248, 0.14);
+        box-shadow: 0 12px 30px rgba(2, 8, 23, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        color: #d8e2f2;
       }
       .hero-panel {
         position: relative;
@@ -619,7 +650,7 @@ function renderHtml(initData) {
         box-shadow: var(--shadow-strong), inset 0 1px 0 rgba(255, 255, 255, 0.52);
       }
       html.dark .status-card {
-        border-color: rgba(255, 255, 255, 0.08);
+        border-color: var(--surface-border);
       }
       .status-card__header {
         background: linear-gradient(135deg, rgba(255, 255, 255, 0.66), rgba(248, 250, 252, 0.8));
@@ -636,8 +667,8 @@ function renderHtml(initData) {
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.68);
       }
       html.dark .subtle-pill {
-        border-color: rgba(255, 255, 255, 0.08);
-        background: linear-gradient(180deg, rgba(24, 31, 46, 0.84), rgba(15, 23, 42, 0.94));
+        border-color: rgba(129, 140, 248, 0.12);
+        background: linear-gradient(180deg, rgba(22, 30, 46, 0.88), rgba(11, 17, 28, 0.96));
       }
       .icon-button {
         display: inline-flex;
@@ -654,9 +685,9 @@ function renderHtml(initData) {
         box-shadow: 0 14px 32px rgba(15, 23, 42, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.8);
       }
       html.dark .icon-button {
-        border-color: rgba(255, 255, 255, 0.08);
-        background: linear-gradient(180deg, rgba(15, 23, 42, 0.84), rgba(15, 23, 42, 0.68));
-        box-shadow: 0 12px 28px rgba(2, 8, 23, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        border-color: rgba(129, 140, 248, 0.14);
+        background: linear-gradient(180deg, rgba(18, 26, 42, 0.86), rgba(10, 15, 26, 0.72));
+        box-shadow: 0 12px 28px rgba(2, 8, 23, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.06);
       }
       .action-button {
         border: 1px solid rgba(148, 163, 184, 0.16);
@@ -668,9 +699,9 @@ function renderHtml(initData) {
         box-shadow: 0 16px 36px rgba(15, 23, 42, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.78);
       }
       html.dark .action-button {
-        border-color: rgba(255, 255, 255, 0.08);
-        background: linear-gradient(135deg, rgba(15, 23, 42, 0.88), rgba(15, 23, 42, 0.74));
-        box-shadow: 0 14px 34px rgba(2, 8, 23, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        border-color: rgba(129, 140, 248, 0.14);
+        background: linear-gradient(135deg, rgba(18, 26, 42, 0.9), rgba(9, 15, 26, 0.78));
+        box-shadow: 0 14px 34px rgba(2, 8, 23, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.06);
       }
       .footer-shell {
         border: 1px solid rgba(255, 255, 255, 0.54);
@@ -702,6 +733,10 @@ function renderHtml(initData) {
         --surface: rgba(14, 25, 41, 0.74);
         --surface-strong: rgba(11, 22, 37, 0.94);
         --surface-tint: rgba(8, 19, 35, 0.82);
+        --surface-top: rgba(10, 23, 39, 0.94);
+        --surface-top-strong: rgba(6, 18, 33, 0.98);
+        --surface-border: rgba(56, 189, 248, 0.16);
+        --surface-border-strong: rgba(103, 232, 249, 0.18);
         --line: rgba(56, 189, 248, 0.22);
         --line-strong: rgba(103, 232, 249, 0.26);
         --text-soft: #94a3b8;
@@ -712,6 +747,7 @@ function renderHtml(initData) {
         --lux-soft: rgba(103, 232, 249, 0.14);
         --shadow-soft: 0 24px 60px rgba(2, 8, 23, 0.42);
         --shadow-strong: 0 32px 80px rgba(2, 132, 199, 0.22);
+        --surface-glare: linear-gradient(145deg, rgba(103, 232, 249, 0.06), transparent 40%, transparent 74%, rgba(34, 211, 238, 0.1));
       }
       html[data-style="original"] .header-shell {
         background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.62));
@@ -730,6 +766,23 @@ function renderHtml(initData) {
       }
       html.dark[data-style="original"] .header-shell {
         background: linear-gradient(180deg, rgba(4, 10, 20, 0.9), rgba(4, 10, 20, 0.68));
+      }
+      html.dark[data-style="original"] body {
+        background:
+          radial-gradient(60rem 60rem at -15% -20%, rgba(34, 211, 238, 0.16), transparent 50%),
+          radial-gradient(52rem 52rem at 120% -10%, rgba(59, 130, 246, 0.14), transparent 42%),
+          radial-gradient(36rem 36rem at 50% 112%, rgba(8, 47, 73, 0.24), transparent 60%),
+          linear-gradient(160deg, var(--bg) 0%, var(--bg-2) 100%);
+        background-attachment: fixed;
+      }
+      html.dark[data-style="original"] body:before {
+        background:
+          radial-gradient(circle at 20% 18%, rgba(103, 232, 249, 0.14), transparent 18%),
+          radial-gradient(circle at 80% 8%, rgba(34, 211, 238, 0.12), transparent 14%);
+      }
+      html.dark[data-style="original"] .app-shell:before {
+        opacity: 0.26;
+        background-image: linear-gradient(rgba(34, 211, 238, 0.07) 1px, transparent 1px), linear-gradient(90deg, rgba(34, 211, 238, 0.07) 1px, transparent 1px);
       }
       html[data-style="original"] .title-gradient {
         background: linear-gradient(95deg, #0e7490 0%, #0369a1 55%, #14b8a6 100%);
@@ -759,6 +812,12 @@ function renderHtml(initData) {
       }
       html[data-style="original"] .app-orb-2 {
         background: rgba(56, 189, 248, 0.2);
+      }
+      html.dark[data-style="original"] .app-orb-1 {
+        background: rgba(34, 211, 238, 0.12);
+      }
+      html.dark[data-style="original"] .app-orb-2 {
+        background: rgba(56, 189, 248, 0.14);
       }
       html[data-style="original"] .hero-chip {
         border-color: rgba(14, 116, 144, 0.15);
@@ -808,6 +867,10 @@ function renderHtml(initData) {
         --surface: rgba(12, 18, 29, 0.74);
         --surface-strong: rgba(8, 12, 22, 0.88);
         --surface-tint: rgba(10, 16, 28, 0.84);
+        --surface-top: rgba(14, 20, 31, 0.94);
+        --surface-top-strong: rgba(9, 14, 24, 0.98);
+        --surface-border: rgba(191, 219, 254, 0.1);
+        --surface-border-strong: rgba(191, 219, 254, 0.12);
         --line: rgba(148, 163, 184, 0.1);
         --line-strong: rgba(147, 197, 253, 0.18);
         --text-soft: #98a4b6;
@@ -818,6 +881,7 @@ function renderHtml(initData) {
         --lux-soft: rgba(156, 192, 255, 0.12);
         --shadow-soft: 0 22px 60px rgba(2, 8, 23, 0.42);
         --shadow-strong: 0 30px 80px rgba(2, 8, 23, 0.32);
+        --surface-glare: linear-gradient(145deg, rgba(255, 255, 255, 0.05), transparent 42%, transparent 76%, rgba(147, 197, 253, 0.08));
       }
       html[data-style="apple"] .header-shell {
         background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.64));
@@ -836,6 +900,23 @@ function renderHtml(initData) {
       }
       html.dark[data-style="apple"] .header-shell {
         background: linear-gradient(180deg, rgba(7, 10, 16, 0.82), rgba(7, 10, 16, 0.64));
+      }
+      html.dark[data-style="apple"] body {
+        background:
+          radial-gradient(54rem 54rem at -12% -18%, rgba(147, 197, 253, 0.14), transparent 50%),
+          radial-gradient(44rem 44rem at 118% -6%, rgba(148, 163, 184, 0.1), transparent 44%),
+          radial-gradient(36rem 36rem at 50% 112%, rgba(15, 23, 42, 0.22), transparent 60%),
+          linear-gradient(160deg, var(--bg) 0%, var(--bg-2) 100%);
+        background-attachment: fixed;
+      }
+      html.dark[data-style="apple"] body:before {
+        background:
+          radial-gradient(circle at 20% 18%, rgba(191, 219, 254, 0.14), transparent 18%),
+          radial-gradient(circle at 80% 8%, rgba(147, 197, 253, 0.1), transparent 14%);
+      }
+      html.dark[data-style="apple"] .app-shell:before {
+        opacity: 0.22;
+        background-image: linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px), linear-gradient(90deg, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
       }
       html[data-style="apple"] .title-gradient {
         background: linear-gradient(180deg, #111827 0%, #4b5563 66%, #60a5fa 100%);
@@ -865,6 +946,12 @@ function renderHtml(initData) {
       }
       html[data-style="apple"] .app-orb-2 {
         background: rgba(96, 165, 250, 0.1);
+      }
+      html.dark[data-style="apple"] .app-orb-1 {
+        background: rgba(148, 163, 184, 0.1);
+      }
+      html.dark[data-style="apple"] .app-orb-2 {
+        background: rgba(96, 165, 250, 0.12);
       }
       html[data-style="apple"] .hero-chip {
         border-color: rgba(148, 163, 184, 0.14);
@@ -1051,23 +1138,23 @@ function renderHtml(initData) {
 
       function getRiskBadgeColor(level) {
         switch (level) {
-          case RiskLevel.CRITICAL: return 'bg-red-100 text-red-800 border-red-200';
-          case RiskLevel.HIGH: return 'bg-orange-100 text-orange-800 border-orange-200';
-          case RiskLevel.ELEVATED: return 'bg-yellow-100 text-yellow-800 border-yellow-200';
-          case RiskLevel.LOW: return 'bg-emerald-100 text-emerald-800 border-emerald-200';
-          case RiskLevel.VERY_LOW: return 'bg-green-100 text-green-800 border-green-200';
-          default: return 'bg-gray-100 text-gray-800 border-gray-200';
+          case RiskLevel.CRITICAL: return 'bg-red-100 text-red-800 border-red-200 dark:bg-red-950/35 dark:text-red-300 dark:border-red-900/50';
+          case RiskLevel.HIGH: return 'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-950/35 dark:text-orange-300 dark:border-orange-900/50';
+          case RiskLevel.ELEVATED: return 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-950/35 dark:text-yellow-300 dark:border-yellow-900/50';
+          case RiskLevel.LOW: return 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950/35 dark:text-emerald-300 dark:border-emerald-900/50';
+          case RiskLevel.VERY_LOW: return 'bg-green-100 text-green-800 border-green-200 dark:bg-green-950/35 dark:text-green-300 dark:border-green-900/50';
+          default: return 'bg-gray-100 text-gray-800 border-gray-200 dark:bg-slate-800/90 dark:text-slate-300 dark:border-slate-700';
         }
       }
 
       function getThreatColor(scoreStr) {
-          if (!scoreStr) return 'bg-blue-50 text-blue-700';
+          if (!scoreStr) return 'bg-blue-50 text-blue-700 dark:bg-blue-950/35 dark:text-blue-300';
           const score = parseFloat(scoreStr);
-          if (isNaN(score)) return 'bg-gray-100 text-gray-600';
-          if (score < 0.001) return 'bg-green-100 text-green-700';
-          if (score < 0.01) return 'bg-blue-100 text-blue-700';
-          if (score < 0.1) return 'bg-yellow-100 text-yellow-700';
-          return 'bg-red-100 text-red-700';
+          if (isNaN(score)) return 'bg-gray-100 text-gray-600 dark:bg-slate-800/90 dark:text-slate-300';
+          if (score < 0.001) return 'bg-green-100 text-green-700 dark:bg-green-950/35 dark:text-green-300';
+          if (score < 0.01) return 'bg-blue-100 text-blue-700 dark:bg-blue-950/35 dark:text-blue-300';
+          if (score < 0.1) return 'bg-yellow-100 text-yellow-700 dark:bg-yellow-950/35 dark:text-yellow-300';
+          return 'bg-red-100 text-red-700 dark:bg-red-950/35 dark:text-red-300';
       }
 
       // 格式化 IP 类型 (住宅/机房/商用)
@@ -1075,17 +1162,17 @@ function renderHtml(initData) {
         if (!type) return <span className="text-slate-400">未知</span>;
         const lowerType = type.toLowerCase();
         let label = type;
-        let colorClass = "text-slate-900 font-bold";
+        let colorClass = 'text-slate-900 dark:text-slate-100 font-bold';
 
         if (lowerType === 'isp') {
             label = '住宅';
-            colorClass = "text-green-600 font-bold";
+            colorClass = 'text-green-600 dark:text-green-300 font-bold';
         } else if (lowerType === 'hosting') {
             label = '机房';
-            colorClass = "text-slate-800 font-bold";
+            colorClass = 'text-slate-800 dark:text-slate-200 font-bold';
         } else if (lowerType === 'business') {
             label = '商用';
-            colorClass = "text-amber-600 font-bold";
+            colorClass = 'text-amber-600 dark:text-amber-300 font-bold';
         }
 
         return <span className={colorClass}>{label}</span>;
@@ -1520,11 +1607,14 @@ function renderHtml(initData) {
         </div>
       );
 
+      const DETAIL_PANEL_CLASS = 'rounded-xl border border-slate-200/90 bg-white/90 p-4 shadow-sm dark:border-white/10 dark:bg-slate-900/72';
+      const DETAIL_PANEL_MUTED_CLASS = 'rounded-xl border border-slate-200/80 bg-slate-50/90 p-4 shadow-sm dark:border-white/10 dark:bg-slate-900/56';
+
       const BoolBadge = ({ value, trueLabel = '是', falseLabel = '否' }) => {
         if (value) {
-          return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100"><AlertTriangle className="w-3 h-3" /> {trueLabel}</span>;
+          return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100 dark:bg-red-950/30 dark:text-red-300 dark:border-red-900/50"><AlertTriangle className="w-3 h-3" /> {trueLabel}</span>;
         }
-        return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-100"><CheckCircle2 className="w-3 h-3" /> {falseLabel}</span>;
+        return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-100 dark:bg-green-950/30 dark:text-green-300 dark:border-green-900/50"><CheckCircle2 className="w-3 h-3" /> {falseLabel}</span>;
       };
 
       // 安全检测项配置（数据驱动渲染，消除重复 JSX）
@@ -1565,13 +1655,13 @@ function renderHtml(initData) {
           content = (
             <div className="flex flex-col items-center justify-center py-20">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
-              <p className="text-slate-500 font-medium">正在深入分析 IP 情报...</p>
+              <p className="text-slate-500 dark:text-slate-400 font-medium">正在深入分析 IP 情报...</p>
             </div>
           );
         } else if (error) {
           content = (
             <div className="flex flex-col items-center justify-center py-20 text-center">
-              <div className="bg-red-50 p-4 rounded-full mb-4">
+              <div className="bg-red-50 dark:bg-red-950/30 p-4 rounded-full mb-4">
                   <AlertTriangle className="w-8 h-8 text-red-500" />
               </div>
               <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">获取详情失败</h3>
@@ -1588,19 +1678,19 @@ function renderHtml(initData) {
                     <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
                         🔍 IP 详细信息
                     </h2>
-                    <span className="text-xs text-slate-400 mt-1 block">数据来源: ipapi.is</span>
+                    <span className="text-xs text-slate-400 dark:text-slate-500 mt-1 block">数据来源: ipapi.is</span>
                   </div>
                   <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition">
-                      <X className="w-5 h-5 text-slate-500" />
+                      <X className="w-5 h-5 text-slate-500 dark:text-slate-400" />
                   </button>
               </div>
 
               {/* 1. 基本信息 */}
-              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
+              <div className={DETAIL_PANEL_CLASS}>
                   <SectionTitle icon={Info} title="基本信息" />
                   <div className="space-y-1">
                       <div className="flex flex-col sm:flex-row justify-between py-2 border-b border-slate-50 dark:border-slate-700">
-                          <span className="text-slate-500 text-sm font-medium">IP 地址</span>
+                          <span className="text-slate-500 dark:text-slate-400 text-sm font-medium">IP 地址</span>
                           <span className="ip-addr text-lg font-mono font-bold text-slate-900 dark:text-slate-100 text-right">{data.ip}</span>
                       </div>
                       <InfoItem label="区域注册机构" value={data.rir || '未知'} highlight />
@@ -1613,10 +1703,10 @@ function renderHtml(initData) {
                         }
                       />
                       <div className="flex flex-col sm:flex-row justify-between py-2 items-center">
-                          <span className="text-slate-500 text-sm font-medium flex items-center gap-1">
+                          <span className="text-slate-500 dark:text-slate-400 text-sm font-medium flex items-center gap-1">
                              综合滥用评分
                              <div className="group relative">
-                                <span className="w-4 h-4 rounded-full bg-blue-100 text-blue-600 text-[10px] flex items-center justify-center cursor-help font-bold">?</span>
+                                <span className="w-4 h-4 rounded-full bg-blue-100 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300 text-[10px] flex items-center justify-center cursor-help font-bold">?</span>
                                 <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-slate-800 text-white text-xs p-2 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
                                     算法: (运营商分+ASN分)/2 * 5 + 风险项加成
                                 </div>
@@ -1634,7 +1724,7 @@ function renderHtml(initData) {
               </div>
 
               {/* 2. 安全检测 */}
-              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
+              <div className={DETAIL_PANEL_CLASS}>
                    <SectionTitle icon={ShieldCheck} title="安全检测" />
                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-2 gap-x-8">
                         {SECURITY_CHECK_ITEMS.map(({ key, label }) => (
@@ -1647,7 +1737,7 @@ function renderHtml(initData) {
               </div>
 
               {/* 3. 位置信息 */}
-              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
+              <div className={DETAIL_PANEL_CLASS}>
                   <SectionTitle icon={MapPin} title="位置信息" />
                   <div className="space-y-1">
                       <InfoItem label="国家" value={\`\${data.location?.country || '未知'} (\${data.location?.country_code || '-'}) \${data.location?.is_eu_member ? '🇪🇺' : ''}\`} />
@@ -1661,7 +1751,7 @@ function renderHtml(initData) {
               </div>
 
               {/* 4. 运营商信息 */}
-              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
+              <div className={DETAIL_PANEL_CLASS}>
                    <SectionTitle icon={Server} title="运营商信息" />
                    <div className="space-y-1">
                        <InfoItem label="运营商名称" value={data.company?.name || '未知'} highlight />
@@ -1669,7 +1759,7 @@ function renderHtml(initData) {
                        <InfoItem label="类型" value={<IpTypeBadge type={data.company?.type} />} />
                        <InfoItem label="网络范围" value={data.company?.network || '-'} />
                        <div className="flex flex-col sm:flex-row justify-between py-2">
-                          <span className="text-slate-500 text-sm font-medium">滥用评分</span>
+                          <span className="text-slate-500 dark:text-slate-400 text-sm font-medium">滥用评分</span>
                           <span className="mt-1 sm:mt-0">
                             {data.company?.abuser_score ? (
                                 <span className={\`px-2 py-0.5 rounded text-xs font-bold \${getThreatColor(data.company.abuser_score)}\`}>
@@ -1682,7 +1772,7 @@ function renderHtml(initData) {
               </div>
 
               {/* 5. ASN 信息 */}
-              <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
+              <div className={DETAIL_PANEL_CLASS}>
                    <SectionTitle icon={Activity} title="ASN 信息" />
                    <div className="space-y-1">
                        <InfoItem label="ASN 编号" value={data.asn?.asn ? \`AS\${data.asn.asn}\` : '未知'} highlight />
@@ -1691,7 +1781,7 @@ function renderHtml(initData) {
                        <InfoItem label="类型" value={<IpTypeBadge type={data.asn?.type} />} />
                        <InfoItem label="国家代码" value={data.asn?.country || '-'} />
                        <div className="flex flex-col sm:flex-row justify-between py-2">
-                          <span className="text-slate-500 text-sm font-medium">滥用评分</span>
+                          <span className="text-slate-500 dark:text-slate-400 text-sm font-medium">滥用评分</span>
                           <span className="mt-1 sm:mt-0">
                             {data.asn?.abuser_score ? (
                                 <span className={\`px-2 py-0.5 rounded text-xs font-bold \${getThreatColor(data.asn.abuser_score)}\`}>
@@ -1705,7 +1795,7 @@ function renderHtml(initData) {
 
               {/* 6. 滥用举报联系方式 */}
               {data.abuse && (
-                  <div className="bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 shadow-sm">
+                  <div className={DETAIL_PANEL_MUTED_CLASS}>
                       <SectionTitle icon={Shield} title="滥用举报联系方式" />
                       <div className="space-y-1 text-sm">
                           {data.abuse.name && <InfoItem label="联系人" value={data.abuse.name} />}
@@ -1723,13 +1813,13 @@ function renderHtml(initData) {
           <div className="fixed inset-0 z-50 overflow-y-auto" role="dialog" aria-modal="true" aria-label="IP 详细信息">
             <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm transition-opacity" onClick={handleBackdropClick}></div>
             <div className="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
-              <div className="relative transform overflow-hidden rounded-2xl bg-white dark:bg-slate-900 text-left shadow-2xl transition-all sm:my-8 sm:w-full sm:max-w-3xl max-h-[90vh] overflow-y-auto scrollbar-hide">
+              <div className="relative transform overflow-hidden rounded-2xl border border-white/70 bg-white/95 dark:border-white/10 dark:bg-slate-950/92 text-left shadow-2xl backdrop-blur-xl transition-all sm:my-8 sm:w-full sm:max-w-3xl max-h-[90vh] overflow-y-auto scrollbar-hide">
                 <div className="absolute top-4 right-4 z-10 md:hidden">
-                  <button type="button" aria-label="关闭" className="rounded-full bg-white/80 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition focus:outline-none" onClick={onClose}>
+                  <button type="button" aria-label="关闭" className="rounded-full bg-white/80 dark:bg-slate-900/80 p-2 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10 transition focus:outline-none" onClick={onClose}>
                     <X className="w-5 h-5" />
                   </button>
                 </div>
-                <div className="p-6 sm:p-8 bg-[#f8fafc] dark:bg-slate-900">{content}</div>
+                <div className="p-6 sm:p-8 bg-[#f8fafc] dark:bg-[#07101d]">{content}</div>
               </div>
             </div>
           </div>
