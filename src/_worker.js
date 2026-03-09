@@ -2205,8 +2205,8 @@ function renderHtml(initData) {
         { id: 'ipv6', sourceName: 'IP.SB IPv6', sourceUrl: 'https://ip.sb', sourceIcon: ICONS.ipsb, isp: '...' },
         { id: 'ipapi', sourceName: 'IPAPI.is', sourceUrl: 'https://ipapi.is', sourceIcon: ICONS.ipapi, isp: '...' },
         { id: 'chatgpt', sourceName: 'chatgpt.com', sourceUrl: 'https://chatgpt.com', sourceIcon: ICONS.chatgpt },
+				{ id: 'openai', sourceName: 'openai.com', sourceUrl: 'https://openai.com', sourceIcon: ICONS.openai },
         { id: 'xcom', sourceName: 'X.com', sourceUrl: 'https://x.com', sourceIcon: ICONS.xcom },
-        { id: 'openai', sourceName: 'openai.com', sourceUrl: 'https://openai.com', sourceIcon: ICONS.openai },
         { id: 'grok', sourceName: 'grok.com', sourceUrl: 'https://grok.com', sourceIcon: ICONS.grok },
       ];
 
