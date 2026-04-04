@@ -1912,7 +1912,7 @@ function renderHtml(initData) {
       };
 
       // --- 泄漏检测卡片组件 ---
-      const LeakDetectionCard = ({ icon: Icon, title, subtitle = '', isLoading, status, statusText, showStatus = true, tone, children }) => {
+      const LeakDetectionCard = ({ icon: Icon, title, subtitle = '', isLoading, status, statusText, showStatus = true, tone, bodyClassName = '', children }) => {
         const statusConfig = {
           safe: { badge: 'border border-emerald-200/70 bg-emerald-50/90 text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-300' },
           leak: { badge: 'border border-rose-200/70 bg-rose-50/90 text-rose-700 dark:border-rose-900/40 dark:bg-rose-950/30 dark:text-rose-300' },
@@ -1943,11 +1943,18 @@ function renderHtml(initData) {
                 </span>
               ) : null}
             </div>
-            <div className="relative p-5 flex-1 flex flex-col justify-center">
+            <div className={'relative p-5 flex-1 flex flex-col justify-center ' + bodyClassName}>
               {isLoading ? (
-                <div className="space-y-3 animate-pulse">
-                  <div className="h-6 bg-slate-100 dark:bg-slate-700 rounded w-3/4 mx-auto"></div>
-                  <div className="h-4 bg-slate-100 dark:bg-slate-700 rounded w-1/2 mx-auto"></div>
+                <div className="text-center animate-pulse">
+                  <div className="h-12 flex items-center justify-center">
+                    <div className="h-6 bg-slate-100 dark:bg-slate-700 rounded w-3/4 mx-auto"></div>
+                  </div>
+                  <div className="mt-3 h-7 flex items-center justify-center">
+                    <div className="h-4 bg-slate-100 dark:bg-slate-700 rounded w-14"></div>
+                  </div>
+                  <div className="mt-1 h-7 flex items-center justify-center">
+                    <div className="h-6 bg-slate-100 dark:bg-slate-700 rounded-lg w-24"></div>
+                  </div>
                 </div>
               ) : children}
             </div>
@@ -1955,10 +1962,12 @@ function renderHtml(initData) {
         );
       };
 
-      const WebRTCProviderCard = ({ provider, isLoading, stylePreset }) => {
+      const WebRTCProviderCard = ({ provider, isLoading, hasChecked, stylePreset }) => {
         const providerStatus = isLoading
           ? { status: 'unknown', text: '检测中...' }
-          : deriveWebRTCStatus(provider);
+          : hasChecked
+            ? deriveWebRTCStatus(provider)
+            : { status: 'unknown', text: '未开始' };
         const tone = getWebRTCTone(provider.id, stylePreset);
 
         return (
@@ -1970,8 +1979,23 @@ function renderHtml(initData) {
             statusText={providerStatus.text}
             showStatus={true}
             tone={tone}
+            bodyClassName="h-32"
           >
-            {provider.error && (!provider.ip || provider.ip === '-') ? (
+            {!hasChecked ? (
+              <div className="text-center">
+                <div className="h-12 flex items-center justify-center text-sm font-medium text-slate-500 dark:text-slate-400">
+                  等待开始检测
+                </div>
+                <div className="mt-3 h-7 flex items-center justify-center text-xs text-slate-400 dark:text-slate-500">
+                  点击上方按钮后显示结果
+                </div>
+                <div className="mt-1 h-7 flex items-center justify-center">
+                  <div className="subtle-pill text-xs text-slate-500 dark:text-slate-300 font-medium px-2.5 py-1 rounded-lg inline-block max-w-full truncate">
+                    {provider.address}
+                  </div>
+                </div>
+              </div>
+            ) : provider.error && (!provider.ip || provider.ip === '-') ? (
               <div className="text-center">
                 <div className="mx-auto max-w-full rounded-xl border border-amber-200/70 bg-amber-50/80 px-3 py-2 text-sm font-medium text-amber-700 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-300 break-words">
                   {provider.error}
@@ -2010,7 +2034,7 @@ function renderHtml(initData) {
 
       // --- 泄漏检测区域 ---
       const LeakDetectionSection = ({ stylePreset }) => {
-        const [webrtc, setWebrtc] = useState({ loading: true, providers: createEmptyWebRTCProviders(), error: null });
+        const [webrtc, setWebrtc] = useState({ loading: false, providers: createEmptyWebRTCProviders(), error: null });
         const [lastCheckedAt, setLastCheckedAt] = useState(null);
         const mountedRef = useRef(true);
 
@@ -2039,12 +2063,13 @@ function renderHtml(initData) {
         }, []);
 
         useEffect(() => {
-          runLeakChecks();
-
           return () => {
             mountedRef.current = false;
           };
-        }, [runLeakChecks]);
+        }, []);
+
+        const hasChecked = Boolean(lastCheckedAt);
+        const buttonText = webrtc.loading ? '检测中' : (hasChecked ? '重新检测' : '开始检测');
 
         return (
           <div className="mt-10">
@@ -2067,18 +2092,20 @@ function renderHtml(initData) {
                     className="action-button inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-medium text-slate-700 dark:text-slate-200 disabled:opacity-60 disabled:cursor-not-allowed transition"
                   >
                     <RefreshCcw className={'w-4 h-4 ' + (webrtc.loading ? 'animate-spin text-indigo-500' : 'text-slate-500')} />
-                    重新检测
+                    {buttonText}
                   </button>
-                  <span className="text-xs text-slate-400 dark:text-slate-500">
-                    {lastCheckedAt ? ('上次检测: ' + lastCheckedAt.toLocaleTimeString('zh-CN', { hour12: false })) : '尚未完成检测'}
-                  </span>
+                  {lastCheckedAt ? (
+                    <span className="text-xs text-slate-400 dark:text-slate-500">
+                      {'上次检测: ' + lastCheckedAt.toLocaleTimeString('zh-CN', { hour12: false })}
+                    </span>
+                  ) : null}
                 </div>
               </div>
             </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
                 {webrtc.providers.map((provider) => (
-                <WebRTCProviderCard key={provider.id} provider={provider} isLoading={webrtc.loading} stylePreset={stylePreset} />
+                <WebRTCProviderCard key={provider.id} provider={provider} isLoading={webrtc.loading} hasChecked={hasChecked} stylePreset={stylePreset} />
                 ))}
               </div>
           </div>
