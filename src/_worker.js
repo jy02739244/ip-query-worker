@@ -341,7 +341,7 @@ function renderHtml(initData) {
     <!-- React & Babel -->
     <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
 
     <script>
       // 注入服务端获取的初始数据（已转义，防止 XSS）

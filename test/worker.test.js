@@ -211,6 +211,13 @@ describe('helper logic', () => {
 });
 
 describe('rendered client script', () => {
+  it('pins Babel standalone to a stable major version', async () => {
+    const response = await runRequest(new Request('https://example.com/'));
+    const html = await response.text();
+
+    expect(html).toContain('https://unpkg.com/@babel/standalone@7.29.7/babel.min.js');
+  });
+
   it('encodes ip when requesting /api/ipapi details', async () => {
     const response = await runRequest(new Request('https://example.com/'));
     const html = await response.text();
