@@ -186,6 +186,715 @@ function getFaviconPng() {
   return _faviconPngCache;
 }
 
+// --- IP 数据源查询链 ---
+// 参考 one-ip：先校验上游返回的 IP 与查询目标一致，再采用结果。
+const IP_LOOKUP_TIMEOUT_MS = 6000;
+const IP_API_COM_FIELDS = 'status,message,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,org,as,asname,mobile,proxy,hosting,query';
+
+async function fetchJsonWithTimeout(url, timeout = IP_LOOKUP_TIMEOUT_MS) {
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json' },
+    signal: AbortSignal.timeout(timeout),
+  });
+
+  if (!response.ok) {
+    const error = new Error(`上游服务返回错误: HTTP ${response.status}`);
+    error.status = response.status;
+    error.body = await response.json().catch(() => null);
+    throw error;
+  }
+
+  return await response.json();
+}
+
+function canonicalizeIpAddress(input) {
+  const value = normalizeTextValue(input);
+  if (isValidIPv4Address(value)) return value;
+  if (!isValidIPv6Address(value)) return '';
+
+  try {
+    return new URL(`http://[${value}]/`).hostname.slice(1, -1);
+  } catch (error) {
+    return value.toLowerCase();
+  }
+}
+
+function isSameIpAddress(left, right) {
+  const leftValue = canonicalizeIpAddress(left);
+  const rightValue = canonicalizeIpAddress(right);
+  return Boolean(leftValue) && leftValue === rightValue;
+}
+
+function matchesLookupTarget(data, target) {
+  const value = normalizeTextValue(data?.ip ?? data?.query);
+  if (!isValidIpAddress(value)) return false;
+  return isValidIpAddress(target) ? isSameIpAddress(value, target) : true;
+}
+
+function parseAsnNumber(value) {
+  const match = normalizeTextValue(value).match(/^AS(\d+)/i);
+  return match ? match[1] : '';
+}
+
+const EU_COUNTRY_CODES = new Set([
+  'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR',
+  'HU', 'IE', 'IT', 'LV', 'LT', 'LU', 'MT', 'NL', 'PL', 'PT', 'RO', 'SK',
+  'SI', 'ES', 'SE',
+]);
+
+function formatLocalTime(timezone) {
+  if (!timezone) return '';
+  try {
+    return new Intl.DateTimeFormat('sv-SE', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date());
+  } catch (error) {
+    return '';
+  }
+}
+
+function normalizeScore(value) {
+  if (value === null || value === undefined) return null;
+  const text = typeof value === 'string' ? value.trim() : value;
+  if (text === '') return null;
+
+  const number = typeof text === 'number' ? text : Number(text);
+  if (!Number.isFinite(number)) return null;
+
+  return Math.max(0, Math.min(100, Math.round(number)));
+}
+
+function normalizeNetCoffeeRange(range) {
+  if (!range || typeof range !== 'object') return null;
+
+  const first = normalizeTextValue(range.first);
+  const last = normalizeTextValue(range.last);
+  if (first && last) {
+    const computed = getRdapAddressRange({ startAddress: first, endAddress: last });
+    if (computed) return computed;
+  }
+
+  const count = typeof range.count === 'number' ? range.count : normalizeTextValue(range.count);
+  if (first || last || count !== '') return { first, last, count };
+  return null;
+}
+
+function buildIpDetail(payload) {
+  const countryCode = normalizeCountryCode(payload.countryCode);
+  const detail = {
+    ip: payload.ip,
+    rir: payload.rir || '',
+    company: {
+      name: payload.companyName || payload.isp || payload.org || '',
+      isp: payload.isp || payload.companyName || payload.org || '',
+      domain: payload.domain || '',
+      type: payload.companyType || (payload.hosting === true ? 'hosting' : ''),
+      network: '',
+      abuser_score: payload.companyScore || '',
+    },
+    asn: {
+      asn: payload.asn || '',
+      name: payload.asnName || '',
+      org: payload.asnOrg || payload.org || '',
+      route: '',
+      type: payload.asnType || (payload.hosting === true ? 'hosting' : ''),
+      country: countryCode,
+      abuser_score: payload.asnScore || '',
+    },
+    location: {
+      country: payload.country || '',
+      country_code: countryCode,
+      is_eu_member: typeof payload.isEu === 'boolean' ? payload.isEu : EU_COUNTRY_CODES.has(countryCode),
+      state: payload.region || '',
+      city: payload.city || '',
+      zip: payload.zip || '',
+      latitude: payload.latitude,
+      longitude: payload.longitude,
+      timezone: payload.timezone || '',
+      local_time: payload.localTime || formatLocalTime(payload.timezone),
+    },
+    registered_country: payload.registeredCountry || '',
+    registered_country_code: normalizeCountryCode(payload.registeredCountryCode),
+    range: payload.range || null,
+    ptr: payload.ptr || '',
+    trust_score: normalizeScore(payload.trustScore),
+    abuse_score: payload.abuseScore || '',
+    datacenter_name: payload.datacenterName || '',
+    rpki_status: payload.rpkiStatus || '',
+    asn_ipv4_count: payload.asnIpv4Count ?? '',
+    asn_allocated: payload.asnAllocated || '',
+    asn_tbps: payload.asnTbps || '',
+    abuse: null,
+    _source: payload.source,
+  };
+
+  if (typeof payload.redditBlocked === 'boolean') detail.reddit_blocked = payload.redditBlocked;
+
+  ['is_mobile', 'is_datacenter', 'is_satellite', 'is_crawler', 'is_proxy', 'is_vpn', 'is_tor', 'is_abuser', 'is_bogon'].forEach((key) => {
+    if (typeof payload[key] === 'boolean') detail[key] = payload[key];
+  });
+
+  return detail;
+}
+
+async function lookupWithIpApiIs(target) {
+  const data = await fetchJsonWithTimeout(`https://api.ipapi.is?q=${encodeURIComponent(target)}`);
+  if (!matchesLookupTarget(data, target)) throw new Error('ipapi.is 未返回有效结果');
+
+  const company = data.company && typeof data.company === 'object' ? data.company : null;
+  const asn = data.asn && typeof data.asn === 'object' ? data.asn : null;
+  const location = data.location || {};
+
+  return buildIpDetail({
+    ip: normalizeTextValue(data.ip),
+    companyName: company?.name || (typeof data.company === 'string' ? data.company : ''),
+    isp: company?.name || (typeof data.company === 'string' ? data.company : ''),
+    domain: company?.domain,
+    asn: asn?.asn || parseAsnNumber(data.asn),
+    asnName: asn?.name || asn?.asname || '',
+    asnOrg: asn?.org || normalizeTextValue(typeof data.asn === 'string' ? data.asn.replace(/^AS\d+\s*/i, '') : ''),
+    country: location.country || data.country,
+    countryCode: location.country_code || data.country_code,
+    region: location.state || data.region,
+    city: location.city || data.city,
+    zip: location.zip,
+    latitude: location.latitude ?? data.lat,
+    longitude: location.longitude ?? data.lon,
+    timezone: location.timezone || data.timezone,
+    localTime: location.local_time,
+    companyScore: company?.abuser_score,
+    asnScore: asn?.abuser_score,
+    isEu: location.is_eu_member,
+    is_mobile: data.is_mobile,
+    is_datacenter: data.is_datacenter,
+    is_satellite: data.is_satellite,
+    is_crawler: data.is_crawler,
+    is_proxy: data.is_proxy,
+    is_vpn: data.is_vpn,
+    is_tor: data.is_tor,
+    is_abuser: data.is_abuser,
+    is_bogon: data.is_bogon,
+    source: 'ipapi.is',
+  });
+}
+
+async function lookupWithIpwho(target) {
+  const data = await fetchJsonWithTimeout(`https://ipwho.is/${encodeURIComponent(target)}`);
+  if (data?.success !== true || !matchesLookupTarget(data, target)) throw new Error('ipwho.is 未返回有效结果');
+
+  const connection = data.connection || {};
+  const timezone = data.timezone || {};
+
+  return buildIpDetail({
+    ip: normalizeTextValue(data.ip),
+    companyName: connection.org || connection.isp,
+    isp: connection.isp || connection.org,
+    domain: connection.domain,
+    asn: connection.asn ? String(connection.asn) : '',
+    asnOrg: connection.org || connection.isp || '',
+    country: data.country,
+    countryCode: data.country_code,
+    region: data.region,
+    city: data.city,
+    zip: data.postal,
+    latitude: data.latitude,
+    longitude: data.longitude,
+    timezone: timezone.id,
+    localTime: timezone.current_time,
+    isEu: data.is_eu,
+    is_bogon: false,
+    source: 'ipwho.is',
+  });
+}
+
+async function lookupWithIpApiCom(target) {
+  const data = await fetchJsonWithTimeout(
+    `http://ip-api.com/json/${encodeURIComponent(target)}?fields=${IP_API_COM_FIELDS}`,
+    5000
+  );
+  if (data?.status !== 'success' || !matchesLookupTarget(data, target)) throw new Error('ip-api.com 未返回有效结果');
+
+  return buildIpDetail({
+    ip: normalizeTextValue(data.query),
+    companyName: data.isp || data.org,
+    isp: data.isp || data.org,
+    asn: parseAsnNumber(data.as),
+    asnName: data.asname || '',
+    asnOrg: data.org || data.asname || data.isp,
+    country: data.country,
+    countryCode: data.countryCode,
+    region: data.regionName,
+    city: data.city,
+    zip: data.zip,
+    latitude: data.lat,
+    longitude: data.lon,
+    timezone: data.timezone,
+    is_mobile: data.mobile,
+    is_proxy: data.proxy,
+    is_datacenter: data.hosting,
+    hosting: data.hosting,
+    is_bogon: false,
+    source: 'ip-api.com',
+  });
+}
+
+async function lookupWithNetCoffee(target) {
+  if (!isValidIpAddress(target)) return null;
+
+  // 参考项目 one-ip 的详情页直接展示 Net.Coffee 的 trust_score；
+  // 这里把同一数据源作为首选，避免本地启发式评分与参考项目产生偏差。
+  const data = await fetchJsonWithTimeout(
+    `https://ip.net.coffee/api/ip/lookup/${encodeURIComponent(target)}`,
+    5000
+  );
+  if (!matchesLookupTarget(data, target)) throw new Error('Net.Coffee 未返回有效结果');
+
+  const detail = buildIpDetail({
+    ip: normalizeTextValue(data.ip),
+    companyName: data.company_name || data.isp,
+    isp: data.isp || data.company_name,
+    companyType: data.company_type,
+    asn: data.asn ? String(data.asn) : '',
+    asnName: data.asname || '',
+    asnOrg: data.asOrganization || data.isp || data.company_name || '',
+    asnType: data.asn_kind || data.company_type || '',
+    country: data.country,
+    countryCode: data.countryCode || data.country_code,
+    region: data.region,
+    city: data.city,
+    latitude: data.latitude ?? data.lat,
+    longitude: data.longitude ?? data.lon,
+    timezone: data.timezone,
+    registeredCountry: data.registered_country,
+    registeredCountryCode: data.registered_country_code,
+    trustScore: data.trust_score,
+    abuseScore: data.intelligence?.abuser_score_raw ?? data.abuser_score,
+    datacenterName: data.datacenter_name,
+    rpkiStatus: data.rpki_status,
+    asnIpv4Count: data.asn_ipv4_count,
+    asnAllocated: data.asn_allocated,
+    asnTbps: data.asn_tbps,
+    redditBlocked: data.reddit_blocked,
+    ptr: data.rdns,
+    range: normalizeNetCoffeeRange(data.range),
+    is_mobile: data.is_mobile,
+    is_datacenter: data.is_datacenter,
+    is_crawler: data.is_crawler,
+    is_proxy: data.is_proxy,
+    is_vpn: data.is_vpn,
+    is_tor: data.is_tor,
+    is_abuser: data.is_abuser,
+    is_bogon: data.is_bogon,
+    source: 'Net.Coffee',
+  });
+
+  detail.company.network = normalizeTextValue(data.cidr);
+  detail.asn.route = normalizeTextValue(data.cidr);
+
+  return detail;
+}
+
+function getRirFromRdapUrl(url) {
+  let host = '';
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch (error) {
+    return '';
+  }
+
+  if (host.includes('apnic')) return 'APNIC';
+  if (host.includes('ripe')) return 'RIPE NCC';
+  if (host.includes('arin')) return 'ARIN';
+  if (host.includes('lacnic')) return 'LACNIC';
+  if (host.includes('afrinic')) return 'AFRINIC';
+  if (host.includes('iana')) return 'IANA';
+  return '';
+}
+
+function readVcardValue(property) {
+  const value = property?.[3];
+  if (Array.isArray(value)) return value.filter(Boolean).join(', ');
+  return normalizeTextValue(value);
+}
+
+function extractVcardContact(entity) {
+  const properties = entity?.vcardArray?.[1] || [];
+  const findProperty = (name) => properties.find((item) => Array.isArray(item) && item[0] === name);
+  const addressProperty = findProperty('adr');
+  const addressParts = Array.isArray(addressProperty?.[3]) ? addressProperty[3].filter(Boolean) : [];
+  const address = normalizeTextValue(addressProperty?.[1]?.label) || addressParts.join(', ');
+
+  return {
+    name: readVcardValue(findProperty('fn')) || normalizeTextValue(entity?.handle),
+    email: readVcardValue(findProperty('email')),
+    phone: readVcardValue(findProperty('tel')),
+    address: address.replace(/\s*\n\s*/g, ', '),
+  };
+}
+
+function collectRdapContacts(entities, output = []) {
+  for (const entity of entities || []) {
+    const contact = extractVcardContact(entity);
+    contact.isAbuse = (entity?.roles || []).includes('abuse');
+    if (contact.name || contact.email || contact.phone || contact.address) output.push(contact);
+    collectRdapContacts(entity?.entities, output);
+  }
+  return output;
+}
+
+function findRdapAbuseContact(entities) {
+  const contacts = collectRdapContacts(entities);
+  const contact =
+    contacts.find((item) => item.isAbuse && (item.email || item.name)) ||
+    contacts.find((item) => item.email && item.email.toLowerCase().includes('abuse'));
+
+  if (!contact) return null;
+  return {
+    name: contact.name,
+    email: contact.email,
+    phone: contact.phone,
+    address: contact.address,
+  };
+}
+
+function getRdapNetworkRange(data) {
+  const cidr = (data?.cidr0_cidrs || [])[0];
+  const prefix = cidr?.v4prefix || cidr?.v6prefix;
+  if (prefix && cidr.length) return `${prefix}/${cidr.length}`;
+  if (data?.startAddress && data?.endAddress) return `${data.startAddress} - ${data.endAddress}`;
+  return '';
+}
+
+function ipv4ToNumber(value) {
+  return value.split('.').reduce((total, part) => total * 256 + Number(part), 0);
+}
+
+function ipv6ToBigInt(value) {
+  let input = value;
+  const ipv4Match = input.match(/(\d+\.\d+\.\d+\.\d+)$/);
+  if (ipv4Match) {
+    const octets = ipv4Match[1].split('.').map(Number);
+    const high = ((octets[0] << 8) | octets[1]).toString(16);
+    const low = ((octets[2] << 8) | octets[3]).toString(16);
+    input = `${input.slice(0, -ipv4Match[1].length)}${high}:${low}`;
+  }
+
+  const [head, tail] = input.split('::');
+  const headParts = head ? head.split(':').filter(Boolean) : [];
+  const tailParts = tail ? tail.split(':').filter(Boolean) : [];
+  const missing = 8 - headParts.length - tailParts.length;
+  const parts = [...headParts, ...Array(Math.max(0, missing)).fill('0'), ...tailParts];
+  return parts.reduce((total, part) => (total << 16n) + BigInt(parseInt(part, 16)), 0n);
+}
+
+function getRdapAddressRange(data) {
+  const first = normalizeTextValue(data?.startAddress);
+  const last = normalizeTextValue(data?.endAddress);
+  const cidr = (data?.cidr0_cidrs || [])[0];
+
+  if (first && last && isValidIPv4Address(first) && isValidIPv4Address(last)) {
+    return { first, last, count: ipv4ToNumber(last) - ipv4ToNumber(first) + 1 };
+  }
+
+  if (first && last && isValidIPv6Address(first) && isValidIPv6Address(last)) {
+    const count = ipv6ToBigInt(last) - ipv6ToBigInt(first) + 1n;
+    return {
+      first,
+      last,
+      count: count <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(count) : count.toString(),
+    };
+  }
+
+  const prefix = cidr?.v4prefix || cidr?.v6prefix;
+  if (prefix && cidr?.length) {
+    const bits = cidr.v6prefix ? 128 : 32;
+    const count = 1n << BigInt(Math.max(0, bits - Number(cidr.length)));
+    return {
+      first: prefix,
+      last: '',
+      count: count <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(count) : count.toString(),
+    };
+  }
+
+  return null;
+}
+
+async function lookupWithRdap(target) {
+  if (!isValidIpAddress(target)) return null;
+
+  // ARIN 的 RDAP 入口会对非 ARIN 地址返回 303，并跳转到对应 RIR
+  const rdapUrl = `https://rdap.arin.net/registry/ip/${target}`;
+  const response = await fetch(rdapUrl, {
+    headers: { Accept: 'application/rdap+json, application/json' },
+    redirect: 'follow',
+    signal: AbortSignal.timeout(5000),
+  });
+
+  if (!response.ok) return null;
+  const data = await response.json().catch(() => null);
+  if (!data) return null;
+
+  return {
+    rir: getRirFromRdapUrl(response.url || rdapUrl),
+    network: getRdapNetworkRange(data),
+    networkName: normalizeTextValue(data.name) || normalizeTextValue(data.handle),
+    countryCode: normalizeTextValue(data.country),
+    range: getRdapAddressRange(data),
+    abuse: findRdapAbuseContact(data.entities),
+  };
+}
+
+function buildRdapDetail(target, rdap) {
+  if (!rdap) return null;
+
+  const detail = buildIpDetail({ ip: target, source: 'RDAP' });
+  detail.rir = rdap.rir;
+  detail.company.name = rdap.networkName;
+  detail.company.network = rdap.network;
+  detail.asn.route = rdap.network;
+  detail.asn.country = rdap.countryCode;
+  detail.location.country_code = rdap.countryCode;
+  detail.registered_country_code = rdap.countryCode;
+  detail.registered_country = rdap.countryCode;
+  detail.range = rdap.range;
+  detail.abuse = rdap.abuse;
+  return detail;
+}
+
+async function lookupWithPtr(target) {
+  if (!isValidIpAddress(target)) return null;
+
+  const reverseName = isValidIPv4Address(target)
+    ? `${target.split('.').reverse().join('.')}.in-addr.arpa`
+    : `${ipv6ToBigInt(target).toString(16).padStart(32, '0').split('').reverse().join('.')}.ip6.arpa`;
+
+  const urls = [
+    `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(reverseName)}&type=PTR`,
+    `https://dns.google/resolve?name=${encodeURIComponent(reverseName)}&type=PTR`,
+  ];
+
+  for (const url of urls) {
+    try {
+      const response = await fetch(url, {
+        headers: { Accept: 'application/dns-json' },
+        signal: AbortSignal.timeout(1500),
+      });
+      if (!response.ok) continue;
+
+      const data = await response.json().catch(() => null);
+      const answer = Array.isArray(data?.Answer)
+        ? data.Answer.find((item) => item?.type === 12 && typeof item.data === 'string')
+        : null;
+      if (answer) return normalizeTextValue(answer.data.replace(/\.$/, ''));
+    } catch (error) {
+      // 尝试下一个 DoH 解析器
+    }
+  }
+
+  return null;
+}
+
+const DETAIL_FLAG_KEYS = [
+  'is_mobile',
+  'is_datacenter',
+  'is_satellite',
+  'is_crawler',
+  'is_proxy',
+  'is_vpn',
+  'is_tor',
+  'is_abuser',
+  'is_bogon',
+];
+
+function mergeDetail(base, extra) {
+  if (!base || !extra) return base;
+
+  const fill = (target, source, keys) => {
+    for (const key of keys) {
+      const value = source[key];
+      if (
+        (target[key] === undefined || target[key] === null || target[key] === '') &&
+        value !== undefined &&
+        value !== null &&
+        value !== ''
+      ) {
+        target[key] = value;
+      }
+    }
+  };
+
+  fill(base, extra, [
+    'rir',
+    'registered_country',
+    'registered_country_code',
+    'range',
+    'ptr',
+    'trust_score',
+    'abuse_score',
+    'datacenter_name',
+    'rpki_status',
+    'asn_ipv4_count',
+    'asn_allocated',
+    'asn_tbps',
+    'reddit_blocked',
+  ]);
+  fill(base.company, extra.company, ['name', 'isp', 'domain', 'type', 'network', 'abuser_score']);
+  fill(base.asn, extra.asn, ['asn', 'name', 'org', 'route', 'type', 'country', 'abuser_score']);
+  fill(base.location, extra.location, ['country', 'country_code', 'state', 'city', 'zip', 'latitude', 'longitude', 'timezone', 'local_time']);
+
+  for (const key of DETAIL_FLAG_KEYS) {
+    if (typeof extra[key] === 'boolean' && (base[key] === undefined || base[key] === null)) {
+      base[key] = extra[key];
+    }
+  }
+
+  if (!base.abuse && extra.abuse) base.abuse = extra.abuse;
+
+  if (extra._source) {
+    const sources = new Set(String(base._source || '').split(' + ').filter(Boolean));
+    for (const source of String(extra._source).split(' + ').filter(Boolean)) sources.add(source);
+    base._source = Array.from(sources).join(' + ');
+  }
+
+  return base;
+}
+
+function finalizeDetail(detail) {
+  if (!detail) return detail;
+
+  const countryCode = detail.location?.country_code || '';
+  if (EU_COUNTRY_CODES.has(countryCode)) detail.location.is_eu_member = true;
+  if (!detail.location.local_time) detail.location.local_time = formatLocalTime(detail.location.timezone);
+  if (!detail.asn.country && countryCode) detail.asn.country = countryCode;
+  if (!detail.company.isp && detail.company.name) detail.company.isp = detail.company.name;
+  if (!detail.company.name && detail.asn.org) detail.company.name = detail.asn.org;
+
+  return detail;
+}
+
+async function lookupWithStopForumSpam(target) {
+  if (!isValidIpAddress(target)) return null;
+
+  const data = await fetchJsonWithTimeout(
+    `https://www.stopforumspam.com/api?ip=${encodeURIComponent(target)}&json`,
+    2500
+  );
+  if (data?.success !== 1 || !data.ip) return null;
+
+  return {
+    is_abuser: Number(data.ip.appears) === 1,
+    reports: Number(data.ip.frequency) || 0,
+  };
+}
+
+const TOR_EXIT_LIST_TTL_MS = 3600000;
+let torExitListPromise = null;
+let torExitListExpiresAt = 0;
+let torExitListRetryAt = 0;
+
+function getTorExitList() {
+  if (Date.now() < torExitListRetryAt) return Promise.resolve(null);
+
+  if (!torExitListPromise || (torExitListExpiresAt > 0 && Date.now() >= torExitListExpiresAt)) {
+    torExitListExpiresAt = 0;
+    torExitListPromise = fetch('https://check.torproject.org/torbulkexitlist', {
+      cf: { cacheTtl: TOR_EXIT_LIST_TTL_MS / 1000, cacheEverything: true },
+      signal: AbortSignal.timeout(2500),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error('Tor exit list unavailable');
+        return response.text();
+      })
+      .then((text) => {
+        const entries = text.split(/\s+/).filter((value) => isValidIPv4Address(value));
+        if (entries.length < 100) throw new Error('Tor exit list incomplete');
+        torExitListExpiresAt = Date.now() + TOR_EXIT_LIST_TTL_MS;
+        return new Set(entries);
+      })
+      .catch(() => {
+        torExitListPromise = null;
+        torExitListExpiresAt = 0;
+        torExitListRetryAt = Date.now() + 300000;
+        return null;
+      });
+  }
+  return torExitListPromise;
+}
+
+export function resetRuntimeCaches() {
+  torExitListPromise = null;
+  torExitListExpiresAt = 0;
+  torExitListRetryAt = 0;
+}
+
+function applyCommunityFlags(detail, stopForumSpam, torExitList, target, ptr) {
+  if (!detail) return detail;
+
+  if (stopForumSpam) {
+    if (typeof detail.is_abuser !== 'boolean') detail.is_abuser = stopForumSpam.is_abuser;
+    detail.abuse = detail.abuse || {};
+    detail.abuse.reports = stopForumSpam.reports;
+  }
+
+  if (torExitList && isValidIPv4Address(target)) {
+    if (typeof detail.is_tor !== 'boolean') detail.is_tor = torExitList.has(target);
+  }
+
+  if (ptr && !detail.ptr) detail.ptr = ptr;
+
+  return detail;
+}
+
+async function lookupIpDetails(target) {
+  const [netCoffeeResult, ipapiResult, ipwhoResult, ipApiComResult, rdapResult, stopForumSpamResult, torResult, ptrResult] = await Promise.allSettled([
+    lookupWithNetCoffee(target),
+    lookupWithIpApiIs(target),
+    lookupWithIpwho(target),
+    lookupWithIpApiCom(target),
+    lookupWithRdap(target),
+    lookupWithStopForumSpam(target),
+    getTorExitList(),
+    lookupWithPtr(target),
+  ]);
+
+  const rdap = rdapResult.status === 'fulfilled' ? rdapResult.value : null;
+  const stopForumSpam = stopForumSpamResult.status === 'fulfilled' ? stopForumSpamResult.value : null;
+  const torExitList = torResult.status === 'fulfilled' ? torResult.value : null;
+  const ptr = ptrResult.status === 'fulfilled' ? ptrResult.value : null;
+  const details = [];
+
+  // Net.Coffee 是参考项目 one-ip 的评分来源，优先作为基础数据；其余源补全缺失字段。
+  if (netCoffeeResult.status === 'fulfilled' && netCoffeeResult.value) details.push(netCoffeeResult.value);
+  if (ipwhoResult.status === 'fulfilled') details.push(ipwhoResult.value);
+  if (ipapiResult.status === 'fulfilled') details.push(ipapiResult.value);
+  if (ipApiComResult.status === 'fulfilled') details.push(ipApiComResult.value);
+
+  const rdapDetail = buildRdapDetail(target, rdap);
+
+  if (details.length === 0) {
+    if (rdapDetail) return finalizeDetail(applyCommunityFlags(rdapDetail, stopForumSpam, torExitList, target, ptr));
+
+    const firstError = [netCoffeeResult, ipapiResult, ipwhoResult, ipApiComResult, rdapResult]
+      .find((result) => result.status === 'rejected')?.reason;
+    if (firstError?.status) throw firstError;
+    throw new Error('所有 IP 数据源暂不可用');
+  }
+
+  const detail = details[0];
+  for (const extra of details.slice(1)) mergeDetail(detail, extra);
+  if (rdapDetail) mergeDetail(detail, rdapDetail);
+  applyCommunityFlags(detail, stopForumSpam, torExitList, target, ptr);
+
+  return finalizeDetail(detail);
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -238,8 +947,8 @@ export default {
       const ip = url.searchParams.get('q');
 
       // 输入校验：拦截无效值与占位值，避免命中上游
-      if (ip && !validateQueryTarget(ip)) {
-        return new Response(JSON.stringify({ error: '无效的 IP 地址或域名格式' }), {
+      if (!ip || !validateQueryTarget(ip)) {
+        return new Response(JSON.stringify({ error: ip ? '无效的 IP 地址或域名格式' : '缺少查询目标' }), {
           status: 400,
           headers: {
             'content-type': 'application/json;charset=UTF-8',
@@ -249,30 +958,11 @@ export default {
         });
       }
 
-      const apiUrl = `https://api.ipapi.is${ip ? `?q=${encodeURIComponent(ip)}` : ''}`;
-
       try {
-        const response = await fetch(apiUrl, {
-          headers: {
-            'Accept': 'application/json',
-          },
-        });
-
-        const data = await response.json().catch(() => null);
-
-        if (!response.ok) {
-          return new Response(JSON.stringify(data || { error: `上游服务返回错误: HTTP ${response.status}` }), {
-            status: response.status,
-            headers: {
-              'content-type': 'application/json;charset=UTF-8',
-              ...corsHeaders,
-              ...SECURITY_HEADERS,
-            },
-          });
-        }
+        const data = await lookupIpDetails(ip);
 
         return new Response(JSON.stringify(data), {
-          status: response.status,
+          status: 200,
           headers: {
             'content-type': 'application/json;charset=UTF-8',
             'Cache-Control': 'public, max-age=60',
@@ -281,8 +971,11 @@ export default {
           },
         });
       } catch (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
-          status: 500,
+        const status = Number.isInteger(error.status) && error.status >= 400 ? error.status : 502;
+        const body = error.body || { error: error.message || '所有 IP 数据源暂不可用' };
+
+        return new Response(JSON.stringify(body), {
+          status,
           headers: {
             'content-type': 'application/json;charset=UTF-8',
             ...corsHeaders,
@@ -1127,6 +1820,153 @@ function renderHtml(initData) {
       }
       .scrollbar-hide::-webkit-scrollbar { display: none; }
       .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+      .ip-detail-overlay {
+        --detail-paper: #ffffff;
+        --detail-wash: #f5f7fa;
+        --detail-ink: #172536;
+        --detail-muted: #596a7e;
+        --detail-line: #e2e8ef;
+        --detail-accent: #0369a1;
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        color: var(--detail-ink);
+        font-family: 'Noto Sans SC', 'PingFang SC', sans-serif;
+      }
+      html.dark .ip-detail-overlay {
+        --detail-paper: #111b29;
+        --detail-wash: #0c1420;
+        --detail-ink: #edf3fa;
+        --detail-muted: #a2b2c6;
+        --detail-line: #29374a;
+        --detail-accent: #7dd3fc;
+      }
+      .ip-detail-backdrop { position: absolute; inset: 0; background: rgba(8, 17, 30, 0.64); }
+      .ip-detail-panel {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        width: min(100%, 960px);
+        max-height: min(90vh, 1040px);
+        max-height: min(90dvh, 1040px);
+        min-height: 0;
+        overflow: hidden;
+        border: 1px solid var(--detail-line);
+        border-radius: 24px;
+        background: var(--detail-paper);
+        box-shadow: 0 32px 96px rgba(2, 8, 23, 0.28);
+        animation: slideUp 0.24s ease-out;
+      }
+      .ip-detail-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-shrink: 0;
+        padding: 12px 24px;
+        border-bottom: 1px solid var(--detail-line);
+      }
+      .ip-detail-toolbar-title { display: flex; align-items: center; gap: 10px; }
+      .ip-detail-toolbar-title > svg { width: 20px; height: 20px; color: var(--detail-muted); }
+      .ip-detail-toolbar h2 { font-size: 16px; font-weight: 700; }
+      .ip-detail-close, .ip-detail-copy, .ip-detail-retry {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-width: 44px;
+        min-height: 44px;
+        border: 1px solid var(--detail-line);
+        border-radius: 12px;
+        background: var(--detail-paper);
+        color: var(--detail-muted);
+        transition: background 0.15s, color 0.15s;
+      }
+      .ip-detail-close { border-color: transparent; }
+      .ip-detail-copy { padding: 0 12px; font-size: 13px; white-space: nowrap; color: var(--detail-accent); }
+      .ip-detail-retry { padding: 0 20px; margin-top: 24px; color: var(--detail-accent); font-size: 16px; }
+      .ip-detail-close:hover, .ip-detail-copy:hover, .ip-detail-retry:hover { background: var(--detail-wash); color: var(--detail-accent); }
+      .ip-detail-close svg, .ip-detail-copy svg { width: 18px; height: 18px; }
+      .ip-detail-overlay :focus-visible { outline: 2px solid var(--detail-accent); outline-offset: -3px; box-shadow: none; }
+      .ip-detail-copy:disabled { cursor: wait; opacity: 0.65; }
+      .ip-detail-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+      .ip-detail-overview {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 32px;
+        padding: 28px 32px;
+      }
+      .ip-detail-address-label { margin-bottom: 8px; color: var(--detail-muted); font-size: 13px; }
+      .ip-detail-address { margin: 0; font: 700 clamp(24px, 3vw, 36px)/1.4 'JetBrains Mono', Consolas, monospace; letter-spacing: -0.055em; overflow-wrap: anywhere; }
+      .ip-detail-meta { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; color: var(--detail-muted); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+      .ip-detail-meta > svg { flex-shrink: 0; width: 18px; height: 18px; margin-top: 3px; }
+      .ip-detail-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; }
+      .ip-detail-tag { padding: 5px 10px; border: 1px solid var(--detail-line); border-radius: 12px; color: var(--detail-muted); font: 500 12px/1.5 'JetBrains Mono', monospace; }
+      .ip-detail-copy-status { color: var(--detail-muted); font-size: 12px; }
+      .ip-detail-score { display: flex; align-items: center; gap: 16px; padding-left: 28px; border-left: 1px solid var(--detail-line); }
+      .ip-detail-score-ring { position: relative; flex-shrink: 0; width: 108px; height: 108px; }
+      .ip-detail-score-ring > svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+      .ip-detail-score-track { stroke: var(--detail-line); }
+      .ip-detail-score-value { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+      .ip-detail-score-value strong { font: 700 32px/1.15 'JetBrains Mono', monospace; letter-spacing: -0.06em; }
+      .ip-detail-score-value small { margin-top: 4px; color: var(--detail-muted); font: 12px/1.4 'JetBrains Mono', monospace; }
+      .ip-detail-score-caption { max-width: 104px; }
+      .ip-detail-score-caption strong { display: block; font-size: 16px; font-weight: 700; color: var(--detail-ink); }
+      .ip-detail-score-caption p { margin-top: 6px; font-size: 12px; line-height: 1.8; color: var(--detail-muted); }
+      .ip-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 24px 32px 32px; border-top: 1px solid var(--detail-line); background: var(--detail-wash); }
+      .ip-detail-section { min-width: 0; padding: 20px; border: 1px solid var(--detail-line); border-radius: 12px; background: var(--detail-paper); }
+      .ip-detail-section-wide { grid-column: 1 / -1; }
+      .ip-detail-section-title { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--detail-line); }
+      .ip-detail-section-title > svg { width: 18px; height: 18px; color: var(--detail-muted); }
+      .ip-detail-section-title h3 { font-size: 16px; font-weight: 700; letter-spacing: 0.02em; }
+      .ip-detail-row { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: start; gap: 12px; padding: 9px 0; font-size: 16px; line-height: 1.6; }
+      .ip-detail-row + .ip-detail-row { border-top: 1px solid var(--detail-line); }
+      .ip-detail-row dt { color: var(--detail-muted); font-size: 14px; }
+      .ip-detail-row dd { min-width: 0; margin: 0; font-weight: 500; text-align: right; overflow-wrap: anywhere; }
+      .ip-detail-section-wide .ip-detail-rows { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 32px; }
+      .ip-detail-section-wide .ip-detail-row:nth-child(2) { border-top: 0; }
+      .ip-detail-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border: 1px solid var(--detail-line); border-radius: 12px; font-size: 12px; font-weight: 500; color: var(--detail-muted); background: var(--detail-wash); }
+      .ip-detail-badge > svg { width: 13px; height: 13px; }
+      .ip-detail-badge-clear { color: #166534; background: #f0fdf4; border-color: #bbf7d0; }
+      .ip-detail-badge-risk { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
+      html.dark .ip-detail-badge-clear { color: #86efac; background: #122b24; border-color: #285444; }
+      html.dark .ip-detail-badge-risk { color: #fca5a5; background: #321d27; border-color: #64303c; }
+      .ip-detail-footer { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 14px 24px; border-top: 1px solid var(--detail-line); color: var(--detail-muted); font-size: 12px; line-height: 1.8; }
+      .ip-detail-footer > svg { width: 15px; height: 15px; flex-shrink: 0; }
+      .ip-detail-state { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 320px; padding: 40px 24px; text-align: center; }
+      .ip-detail-state-icon { display: grid; place-items: center; width: 64px; height: 64px; margin-bottom: 20px; border: 1px solid var(--detail-line); border-radius: 12px; background: var(--detail-wash); color: var(--detail-muted); }
+      .ip-detail-state h3 { font-size: 20px; font-weight: 700; }
+      .ip-detail-state p { max-width: 360px; margin-top: 12px; color: var(--detail-muted); font-size: 16px; line-height: 1.8; overflow-wrap: anywhere; }
+      .ip-detail-state-address { font-family: 'JetBrains Mono', monospace; }
+      @media (max-width: 760px) {
+        .ip-detail-overview { gap: 20px; padding: 24px; }
+        .ip-detail-score { padding-left: 20px; }
+        .ip-detail-score-caption { display: none; }
+        .ip-detail-grid { padding: 20px 24px 24px; }
+        .ip-detail-row { grid-template-columns: 88px minmax(0, 1fr); gap: 8px; }
+      }
+      @media (max-width: 600px) {
+        .ip-detail-overlay { padding: 8px; }
+        .ip-detail-panel { max-height: 96vh; max-height: 96dvh; border-radius: 24px; }
+        .ip-detail-toolbar { padding: 10px 16px; }
+        .ip-detail-overview { grid-template-columns: minmax(0, 1fr); gap: 20px; padding: 24px 20px; }
+        .ip-detail-address { font-size: 26px; }
+        .ip-detail-score { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--detail-line); }
+        .ip-detail-score-ring { width: 88px; height: 88px; }
+        .ip-detail-score-value strong { font-size: 28px; }
+        .ip-detail-score-caption { display: block; max-width: none; }
+        .ip-detail-grid { grid-template-columns: minmax(0, 1fr); padding: 16px 12px 20px; gap: 12px; }
+        .ip-detail-section { padding: 16px; }
+        .ip-detail-section-wide .ip-detail-rows { display: block; }
+        .ip-detail-section-wide .ip-detail-row:nth-child(2) { border-top: 1px solid var(--detail-line); }
+        .ip-detail-row { grid-template-columns: 96px minmax(0, 1fr); }
+        .ip-detail-footer { align-items: flex-start; padding: 12px 16px; }
+        .ip-detail-footer > svg { margin-top: 3px; }
+      }
       button,
       a {
         -webkit-tap-highlight-color: transparent;
@@ -1198,15 +2038,6 @@ function renderHtml(initData) {
       };
 
       // --- 枚举与工具函数 ---
-      const RiskLevel = {
-        VERY_LOW: '极度纯净',
-        LOW: '纯净',
-        ELEVATED: '轻微风险',
-        HIGH: '高风险',
-        CRITICAL: '极度危险',
-        UNKNOWN: '未知'
-      };
-
       function getFlagEmoji(countryCode) {
         if (!/^[A-Z]{2}$/i.test(String(countryCode || ''))) return '🏳️';
         const codePoints = countryCode
@@ -1216,65 +2047,13 @@ function renderHtml(initData) {
         return String.fromCodePoint(...codePoints);
       }
 
-      function calculateAbuseScore(data) {
-        const companyScoreStr = data.company?.abuser_score;
-        const asnScoreStr = data.asn?.abuser_score;
-
-        let company = 0;
-        let asn = 0;
-
-        if (companyScoreStr && companyScoreStr !== 'Unknown') company = parseFloat(companyScoreStr) || 0;
-        if (asnScoreStr && asnScoreStr !== 'Unknown') asn = parseFloat(asnScoreStr) || 0;
-
-        // 基础分公式: (运营商分 + ASN分) / 2 * 5
-        let baseScore = ((company + asn) / 2) * 5;
-
-        const riskFlags = [
-          data.is_crawler, data.is_proxy, data.is_vpn,
-          data.is_tor, data.is_abuser, data.is_bogon
-        ];
-
-        // 每个风险项增加 15%
-        const riskCount = riskFlags.filter(flag => flag === true).length;
-        const riskAddition = riskCount * 0.15;
-
-        const finalScore = baseScore + riskAddition;
-
-        if (baseScore === 0 && riskAddition === 0) {
-          return { score: null, level: RiskLevel.UNKNOWN, percentage: null };
-        }
-
-        const percentage = finalScore * 100;
-        let level = RiskLevel.VERY_LOW;
-
-        // 按照你要求的阈值判断等级
-        if (percentage >= 100) level = RiskLevel.CRITICAL;
-        else if (percentage >= 20) level = RiskLevel.HIGH;
-        else if (percentage >= 5) level = RiskLevel.ELEVATED;
-        else if (percentage >= 0.25) level = RiskLevel.LOW;
-
-        return { score: finalScore, level, percentage };
-      }
-
-      function getRiskBadgeColor(level) {
-        switch (level) {
-          case RiskLevel.CRITICAL: return 'bg-red-100 text-red-800 border-red-200 dark:bg-red-950/35 dark:text-red-300 dark:border-red-900/50';
-          case RiskLevel.HIGH: return 'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-950/35 dark:text-orange-300 dark:border-orange-900/50';
-          case RiskLevel.ELEVATED: return 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-950/35 dark:text-yellow-300 dark:border-yellow-900/50';
-          case RiskLevel.LOW: return 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:bg-emerald-950/35 dark:text-emerald-300 dark:border-emerald-900/50';
-          case RiskLevel.VERY_LOW: return 'bg-green-100 text-green-800 border-green-200 dark:bg-green-950/35 dark:text-green-300 dark:border-green-900/50';
-          default: return 'bg-gray-100 text-gray-800 border-gray-200 dark:bg-slate-800/90 dark:text-slate-300 dark:border-slate-700';
-        }
-      }
-
-      function getThreatColor(scoreStr) {
-          if (!scoreStr) return 'bg-blue-50 text-blue-700 dark:bg-blue-950/35 dark:text-blue-300';
-          const score = parseFloat(scoreStr);
-          if (isNaN(score)) return 'bg-gray-100 text-gray-600 dark:bg-slate-800/90 dark:text-slate-300';
-          if (score < 0.001) return 'bg-green-100 text-green-700 dark:bg-green-950/35 dark:text-green-300';
-          if (score < 0.01) return 'bg-blue-100 text-blue-700 dark:bg-blue-950/35 dark:text-blue-300';
-          if (score < 0.1) return 'bg-yellow-100 text-yellow-700 dark:bg-yellow-950/35 dark:text-yellow-300';
-          return 'bg-red-100 text-red-700 dark:bg-red-950/35 dark:text-red-300';
+      function getTrustScoreColor(score) {
+        if (typeof score !== 'number' || !Number.isFinite(score)) return 'text-slate-600 dark:text-slate-400';
+        return score >= 75
+          ? 'text-green-700 dark:text-green-400'
+          : score >= 45
+            ? 'text-yellow-800 dark:text-yellow-300'
+            : 'text-red-600 dark:text-red-400';
       }
 
       // 格式化 IP 类型 (住宅/机房/商用)
@@ -1831,54 +2610,162 @@ function renderHtml(initData) {
       };
 
       const SectionTitle = ({ icon: Icon, title }) => (
-        <div className="flex items-center gap-2 mb-3 text-slate-800 dark:text-slate-200 pb-2 border-b border-slate-100 dark:border-slate-700">
-            <Icon className="w-5 h-5 text-indigo-500 dark:text-indigo-300" />
-            <h3 className="font-bold text-base">{title}</h3>
+        <div className="ip-detail-section-title">
+            <Icon />
+            <h3>{title}</h3>
         </div>
       );
-
-      const InfoItem = ({ label, value, highlight = false }) => (
-        <div className="flex flex-col sm:flex-row justify-between py-2">
-          <span className="text-slate-500 dark:text-slate-400 text-sm font-medium min-w-[120px]">{label}</span>
-          <span className={\`text-sm sm:text-right mt-1 sm:mt-0 break-words \${highlight ? 'font-bold text-slate-900 dark:text-slate-100' : 'text-slate-700 dark:text-slate-300'}\`}>
-            {value}
-          </span>
-        </div>
-      );
-
-      const DETAIL_PANEL_CLASS = 'rounded-xl border border-slate-200/90 bg-white/90 p-4 shadow-sm dark:border-white/10 dark:bg-slate-900/72';
-      const DETAIL_PANEL_MUTED_CLASS = 'rounded-xl border border-slate-200/80 bg-slate-50/90 p-4 shadow-sm dark:border-white/10 dark:bg-slate-900/56';
 
       const BoolBadge = ({ value, trueLabel = '是', falseLabel = '否' }) => {
-        if (value) {
-          return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-100 dark:bg-red-950/30 dark:text-red-300 dark:border-red-900/50"><AlertTriangle className="w-3 h-3" /> {trueLabel}</span>;
-        }
-        return <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-100 dark:bg-green-950/30 dark:text-green-300 dark:border-green-900/50"><CheckCircle2 className="w-3 h-3" /> {falseLabel}</span>;
+        const label = value === undefined || value === null ? '未知' : value ? trueLabel : falseLabel;
+        return <span className="ip-detail-badge">{label}</span>;
       };
 
-      // 安全检测项配置（数据驱动渲染，消除重复 JSX）
-      const SECURITY_CHECK_ITEMS = [
-        { key: 'is_mobile', label: '移动流量' },
-        { key: 'is_datacenter', label: '数据中心' },
-        { key: 'is_satellite', label: '卫星网络' },
-        { key: 'is_crawler', label: '爬虫' },
-        { key: 'is_proxy', label: '代理服务器' },
-        { key: 'is_vpn', label: 'VPN' },
-        { key: 'is_tor', label: 'Tor 网络' },
-        { key: 'is_abuser', label: '滥用 IP' },
-        { key: 'is_bogon', label: '虚假 IP' },
-      ];
+      const RiskFlagBadge = ({ value }) => {
+        if (value === true) {
+          return <span className="ip-detail-badge ip-detail-badge-risk"><AlertTriangle />已检测到</span>;
+        }
+        if (value === false) {
+          return <span className="ip-detail-badge ip-detail-badge-clear"><CheckCircle2 />未检测到</span>;
+        }
+        return <span className="ip-detail-badge" title="数据源未提供该项检测结果"><Info />暂无数据</span>;
+      };
 
-      const IpDetailModal = ({ isOpen, onClose, data, loading, error }) => {
-        // ESC 键关闭 Modal
+      const DetailRows = ({ rows }) => (
+        <dl className="ip-detail-rows">
+          {rows.map(([label, value]) => (
+            <div key={label} className="ip-detail-row">
+              <dt>{label}</dt>
+              <dd>{value}</dd>
+            </div>
+          ))}
+        </dl>
+      );
+
+      const DetailSection = ({ icon, title, rows, wide }) => {
+        if (!rows.length) return null;
+        return (
+          <section className={'ip-detail-section' + (wide ? ' ip-detail-section-wide' : '')} aria-label={title}>
+            <SectionTitle icon={icon} title={title} />
+            <DetailRows rows={rows} />
+          </section>
+        );
+      };
+
+      const getCountryDisplayName = (value) => {
+        const text = String(value || '').trim();
+        if (!text) return '';
+        const code = /^[A-Za-z]{2}$/.test(text) ? text.toUpperCase() : '';
+        if (!code) return text;
+        try {
+          return new Intl.DisplayNames(['zh-CN'], { type: 'region' }).of(code) || code;
+        } catch (error) {
+          return code;
+        }
+      };
+
+      const formatAddressCount = (value) => {
+        if (typeof value === 'number' && Number.isFinite(value)) return value.toLocaleString('zh-CN');
+        if (typeof value === 'string' && /^\d+$/.test(value)) {
+          try {
+            return BigInt(value).toLocaleString('zh-CN');
+          } catch (error) {
+            return value;
+          }
+        }
+        return String(value);
+      };
+
+      const hasDetailValue = (value) => value !== undefined && value !== null && value !== '' && value !== '-' && value !== 'Unknown';
+
+      const IpDetailModal = ({ isOpen, onClose, onRetry, selectedIp, data, loading, error }) => {
+        const [clientTrustScore, setClientTrustScore] = useState(null);
+        const [copyStatus, setCopyStatus] = useState('');
+        const panelRef = useRef(null);
+        const closeRef = useRef(null);
+        const copyOperationRef = useRef(0);
+
+        useEffect(() => {
+          copyOperationRef.current += 1;
+          setCopyStatus('');
+          return () => { copyOperationRef.current += 1; };
+        }, [isOpen, data?.ip]);
+
+        // Worker 端请求 Net.Coffee 可能受出口限流影响；参考项目本身是浏览器直连，
+        // 这里在服务端没有拿到 trust_score 时，用浏览器直连补一次评分。
+        useEffect(() => {
+          if (!isOpen || !data?.ip) {
+            setClientTrustScore(null);
+            return;
+          }
+
+          const serverScore = data.trust_score;
+          if (typeof serverScore === 'number' && Number.isFinite(serverScore) && serverScore >= 0 && serverScore <= 100) {
+            setClientTrustScore(null);
+            return;
+          }
+
+          let cancelled = false;
+          const controller = new AbortController();
+
+          fetch('https://ip.net.coffee/api/ip/lookup/' + encodeURIComponent(data.ip), {
+            headers: { Accept: 'application/json' },
+            signal: controller.signal,
+          })
+            .then((response) => (response.ok ? response.json() : null))
+            .then((payload) => {
+              if (cancelled || !payload) return;
+              if (!isSameIpAddress(payload.ip, data.ip)) return;
+              const score = payload.trust_score;
+              if (typeof score === 'number' && Number.isFinite(score) && score >= 0 && score <= 100) {
+                setClientTrustScore(Math.round(score));
+              }
+            })
+            .catch(() => {});
+
+          return () => {
+            cancelled = true;
+            controller.abort();
+          };
+        }, [isOpen, data?.ip, data?.trust_score]);
+
         useEffect(() => {
           if (!isOpen) return;
+          const previousFocus = document.activeElement;
+          const previousOverflow = document.body.style.overflow;
+          document.body.style.overflow = 'hidden';
+          closeRef.current?.focus();
           const handleKeyDown = (e) => {
             if (e.key === 'Escape') onClose();
+            if (e.key !== 'Tab') return;
+            const targets = panelRef.current?.querySelectorAll('button:not(:disabled), a[href], [tabindex="0"]');
+            if (!targets?.length) return;
+            const first = targets[0];
+            const last = targets[targets.length - 1];
+            if (!Array.from(targets).includes(document.activeElement)) {
+              e.preventDefault();
+              (e.shiftKey ? last : first).focus();
+              return;
+            }
+            if (e.shiftKey && document.activeElement === first) {
+              e.preventDefault();
+              last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+              e.preventDefault();
+              first.focus();
+            }
           };
           document.addEventListener('keydown', handleKeyDown);
-          return () => document.removeEventListener('keydown', handleKeyDown);
+          return () => {
+            document.removeEventListener('keydown', handleKeyDown);
+            document.body.style.overflow = previousOverflow;
+            if (previousFocus?.isConnected) previousFocus.focus();
+          };
         }, [isOpen, onClose]);
+
+        useEffect(() => {
+          if (isOpen && !panelRef.current?.contains(document.activeElement)) closeRef.current?.focus();
+        }, [isOpen, loading, error, data?.ip]);
 
         if (!isOpen) return null;
 
@@ -1886,179 +2773,186 @@ function renderHtml(initData) {
           if (e.target === e.currentTarget) onClose();
         };
 
+        const handleCopy = async () => {
+          const operation = ++copyOperationRef.current;
+          setCopyStatus('复制中');
+          try {
+            await navigator.clipboard.writeText(data.ip);
+            if (operation === copyOperationRef.current) setCopyStatus('已复制');
+          } catch (error) {
+            if (operation === copyOperationRef.current) setCopyStatus('复制失败，请手动选择 IP');
+          }
+        };
+
         let content;
-        let riskInfo = { score: null, level: RiskLevel.UNKNOWN, percentage: null };
-        if (data) riskInfo = calculateAbuseScore(data);
 
         if (loading) {
           content = (
-            <div className="flex flex-col items-center justify-center py-20">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mb-4"></div>
-              <p className="text-slate-500 dark:text-slate-400 font-medium">正在深入分析 IP 情报...</p>
+            <div className="ip-detail-state" role="status">
+              <div className="ip-detail-state-icon"><span className="animate-spin"><RefreshCcw /></span></div>
+              <h3>正在查询 IP 情报</h3>
+              <p className="ip-detail-state-address">{selectedIp}</p>
+              <p>正在汇总网络归属、地理位置与风险信息…</p>
             </div>
           );
         } else if (error) {
           content = (
-            <div className="flex flex-col items-center justify-center py-20 text-center">
-              <div className="bg-red-50 dark:bg-red-950/30 p-4 rounded-full mb-4">
-                  <AlertTriangle className="w-8 h-8 text-red-500" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">获取详情失败</h3>
-              <p className="text-slate-500 dark:text-slate-400 mt-2 max-w-xs">{error}</p>
-              <button onClick={onClose} className="mt-6 px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg transition">关闭</button>
+            <div className="ip-detail-state" role="alert">
+              <div className="ip-detail-state-icon"><AlertTriangle /></div>
+              <h3>获取详情失败</h3>
+              <p>{error}</p>
+              <button onClick={onRetry} className="ip-detail-retry">重新获取</button>
             </div>
           );
         } else if (data) {
+          const serverTrustScore =
+            typeof data.trust_score === 'number' &&
+            Number.isFinite(data.trust_score) &&
+            data.trust_score >= 0 &&
+            data.trust_score <= 100
+              ? Math.round(data.trust_score)
+              : null;
+          const trustScore = serverTrustScore ?? clientTrustScore;
+          const reputationLabel = trustScore === 100 ? '满分信誉' : 'IP 信誉分';
+          const boolRow = (label, value) => (typeof value === 'boolean' ? [label, <BoolBadge value={value} />] : null);
+          const riskFlagRow = (label, value) => [label, <RiskFlagBadge value={value} />];
+          const formatRpkiStatus = (value) => {
+            const key = String(value || '').toLowerCase();
+            const labels = { valid: '有效', invalid: '无效', notfound: '未声明 ROA', unknown: '未知' };
+            return labels[key] || String(value);
+          };
+          const registeredCountry = hasDetailValue(data.registered_country)
+            ? data.registered_country
+            : getCountryDisplayName(data.registered_country_code);
+          const displayCountry = data.location?.country || getCountryDisplayName(data.location?.country_code);
+          const companyName = data.company?.name || '';
+          const serviceProvider = data.company?.isp || companyName;
+
+          const networkRows = [
+            hasDetailValue(registeredCountry) ? ['注册国家', registeredCountry] : null,
+            boolRow('数据中心', data.is_datacenter),
+            boolRow('移动网络', data.is_mobile),
+            hasDetailValue(companyName) ? ['企业信息', companyName] : null,
+            hasDetailValue(data.datacenter_name) ? ['机房名称', data.datacenter_name] : null,
+          ].filter(Boolean);
+
+          const asnRows = [
+            hasDetailValue(data.asn?.asn) ? ['ASN', 'AS' + data.asn.asn] : null,
+            hasDetailValue(serviceProvider) ? ['服务商', serviceProvider] : null,
+            hasDetailValue(data.asn?.name) ? ['ASN 归属', data.asn.name] : null,
+            hasDetailValue(data.asn?.org) ? ['ASN 组织', data.asn.org] : null,
+            hasDetailValue(data.company?.network || data.asn?.route) ? ['CIDR', data.company?.network || data.asn?.route] : null,
+            hasDetailValue(data.asn?.type) ? ['ASN 自报类型', <IpTypeBadge type={data.asn.type} />] : null,
+            hasDetailValue(data.asn_ipv4_count) ? ['ASN IPv4 总量', formatAddressCount(data.asn_ipv4_count)] : null,
+            hasDetailValue(data.asn_allocated) ? ['ASN 注册日期', data.asn_allocated] : null,
+          ].filter(Boolean);
+
+          const technicalRows = [
+            ['地址类型', data.ip && data.ip.includes(':') ? 'IPv6' : 'IPv4'],
+            hasDetailValue(data.range?.first) && hasDetailValue(data.range?.last) ? ['IP 范围', data.range.first + ' – ' + data.range.last] : null,
+            hasDetailValue(data.range?.count) ? ['地址数量', formatAddressCount(data.range.count)] : null,
+            hasDetailValue(data.asn_tbps) ? ['预估带宽', data.asn_tbps] : null,
+            riskFlagRow('Bogon', data.is_bogon),
+            riskFlagRow('Reddit 限制', data.reddit_blocked),
+            hasDetailValue(data.ptr) ? ['PTR', data.ptr] : null,
+            hasDetailValue(data.rpki_status) ? ['RPKI', formatRpkiStatus(data.rpki_status)] : null,
+          ].filter(Boolean);
+
+          const riskRows = [
+            riskFlagRow('VPN', data.is_vpn),
+            riskFlagRow('代理', data.is_proxy),
+            riskFlagRow('Tor', data.is_tor),
+            riskFlagRow('爬虫标记', data.is_crawler),
+            riskFlagRow('滥用标记', data.is_abuser),
+            hasDetailValue(data.abuse_score || data.company?.abuser_score || data.asn?.abuser_score)
+              ? ['滥用评分', data.abuse_score || data.company?.abuser_score || data.asn?.abuser_score]
+              : null,
+          ].filter(Boolean);
+
+          const locationRows = [
+            hasDetailValue(data._source) ? ['数据来源', data._source] : null,
+            hasDetailValue(displayCountry) ? ['国家 / 地区', displayCountry] : null,
+            hasDetailValue(data.location?.state) ? ['地区', data.location.state] : null,
+            hasDetailValue(data.location?.city) ? ['城市', data.location.city] : null,
+            hasDetailValue(data.location?.latitude) ? ['纬度', data.location.latitude] : null,
+            hasDetailValue(data.location?.longitude) ? ['经度', data.location.longitude] : null,
+          ].filter(Boolean);
+
+          const detailSections = [
+            { icon: Activity, title: 'ASN / 运营商', rows: asnRows },
+            { icon: ShieldCheck, title: '风险深度检测', rows: riskRows },
+            { icon: Server, title: '网络属性', rows: networkRows },
+            { icon: MapPin, title: '地理位置', rows: locationRows },
+            { icon: Info, title: '技术指标', rows: technicalRows, wide: true },
+          ].filter((section) => section.rows.length > 0);
+
           content = (
-            <div className="space-y-6 animate-slide-up">
-              {/* 标题区 */}
-              <div className="flex items-center justify-between">
-                  <div>
-                    <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                        🔍 IP 详细信息
-                    </h2>
-                    <span className="text-xs text-slate-400 dark:text-slate-500 mt-1 block">数据来源: ipapi.is</span>
+            <>
+              <div className="ip-detail-overview">
+                <div className="min-w-0">
+                  <p className="ip-detail-address-label">IP 地址</p>
+                  <h3 className="ip-detail-address">{data.ip?.split(':').map((part, index, parts) => <React.Fragment key={index}>{part + (index < parts.length - 1 ? ':' : '')}<wbr /></React.Fragment>)}</h3>
+                  <div className="ip-detail-meta">
+                    <MapPin />
+                    <span>
+                      {[displayCountry, data.location?.state, data.location?.city].filter(Boolean).filter((value, index, all) => all.indexOf(value) === index).join(' · ') || '未知位置'}
+                    </span>
                   </div>
-                  <button onClick={onClose} className="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-full transition">
-                      <X className="w-5 h-5 text-slate-500 dark:text-slate-400" />
-                  </button>
-              </div>
-
-              {/* 1. 基本信息 */}
-              <div className={DETAIL_PANEL_CLASS}>
-                  <SectionTitle icon={Info} title="基本信息" />
-                  <div className="space-y-1">
-                      <div className="flex flex-col sm:flex-row justify-between py-2 border-b border-slate-50 dark:border-slate-700">
-                          <span className="text-slate-500 dark:text-slate-400 text-sm font-medium">IP 地址</span>
-                          <span className="ip-addr text-lg font-mono font-bold text-slate-900 dark:text-slate-100 text-right">{data.ip}</span>
-                      </div>
-                      <InfoItem label="区域注册机构" value={data.rir || '未知'} highlight />
-                      <InfoItem
-                        label="运营商 / ASN 类型"
-                        value={
-                            <span>
-                                <IpTypeBadge type={data.company?.type} /> / <IpTypeBadge type={data.asn?.type} />
-                            </span>
-                        }
-                      />
-                      <div className="flex flex-col sm:flex-row justify-between py-2 items-center">
-                          <span className="text-slate-500 dark:text-slate-400 text-sm font-medium flex items-center gap-1">
-                             综合滥用评分
-                             <div className="group relative">
-                                <span className="w-4 h-4 rounded-full bg-blue-100 text-blue-600 dark:bg-blue-950/40 dark:text-blue-300 text-[10px] flex items-center justify-center cursor-help font-bold">?</span>
-                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-slate-800 text-white text-xs p-2 rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10">
-                                    算法: (运营商分+ASN分)/2 * 5 + 风险项加成
-                                </div>
-                             </div>
-                          </span>
-                          <div className="text-right mt-1 sm:mt-0">
-                              {riskInfo.score !== null ? (
-                                  <span className={\`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-sm font-bold border \${getRiskBadgeColor(riskInfo.level)}\`}>
-                                      {riskInfo.percentage?.toFixed(2)}% {riskInfo.level}
-                                  </span>
-                              ) : <span className="text-slate-400">未知</span>}
-                          </div>
-                      </div>
+                  <div className="ip-detail-tags">
+                    <span className="ip-detail-tag">{data.ip?.includes(':') ? 'IPv6' : 'IPv4'}</span>
+                    {hasDetailValue(data.asn?.asn) && <span className="ip-detail-tag">{'AS' + data.asn.asn}</span>}
+                    {hasDetailValue(data.rir) && <span className="ip-detail-tag">{data.rir}</span>}
+                    <button className="ip-detail-copy" onClick={handleCopy} disabled={copyStatus === '复制中'} aria-label="复制 IP 地址">
+                      {copyStatus === '已复制' ? <CheckCircle2 /> : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>}
+                      {copyStatus === '已复制' ? '已复制' : '复制 IP'}
+                    </button>
+                    <span className={copyStatus === '已复制' ? 'sr-only' : 'ip-detail-copy-status'} role="status">{copyStatus}</span>
                   </div>
-              </div>
-
-              {/* 2. 安全检测 */}
-              <div className={DETAIL_PANEL_CLASS}>
-                   <SectionTitle icon={ShieldCheck} title="安全检测" />
-                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-2 gap-x-8">
-                        {SECURITY_CHECK_ITEMS.map(({ key, label }) => (
-                            <div key={key} className="flex justify-between items-center py-1">
-                                <span className="text-slate-600 dark:text-slate-300 text-sm">{label}</span>
-                                <BoolBadge value={data[key]} trueLabel="是" falseLabel="否" />
-                            </div>
-                        ))}
-                   </div>
-              </div>
-
-              {/* 3. 位置信息 */}
-              <div className={DETAIL_PANEL_CLASS}>
-                  <SectionTitle icon={MapPin} title="位置信息" />
-                  <div className="space-y-1">
-                      <InfoItem label="国家" value={\`\${data.location?.country || '未知'} (\${data.location?.country_code || '-'}) \${data.location?.is_eu_member ? '🇪🇺' : ''}\`} />
-                      {data.location?.state && <InfoItem label="省份/州" value={data.location.state} />}
-                      {data.location?.city && <InfoItem label="城市" value={data.location.city} />}
-                      {data.location?.zip && <InfoItem label="邮编" value={data.location.zip} />}
-                      <InfoItem label="坐标" value={\`\${data.location?.latitude || '-'}, \${data.location?.longitude || '-'}\`} />
-                      <InfoItem label="时区" value={data.location?.timezone || '-'} />
-                      <InfoItem label="当地时间" value={data.location?.local_time || '-'} />
+                </div>
+                <div className={'ip-detail-score ' + getTrustScoreColor(trustScore)} aria-label={trustScore === null ? '信誉分未知' : 'IP 信誉分 ' + trustScore + ' / 100'}>
+                  <div className="ip-detail-score-ring">
+                    <svg viewBox="0 0 100 100" fill="none" aria-hidden="true">
+                      <circle className="ip-detail-score-track" cx="50" cy="50" r="43" strokeWidth="5" />
+                      {trustScore !== null && <circle cx="50" cy="50" r="43" stroke="currentColor" strokeWidth="5" strokeLinecap="round" pathLength="100" strokeDasharray={trustScore + ' 100'} />}
+                    </svg>
+                    <div className="ip-detail-score-value"><strong>{trustScore === null ? '—' : trustScore}</strong><small>/ 100</small></div>
                   </div>
-              </div>
-
-              {/* 4. 运营商信息 */}
-              <div className={DETAIL_PANEL_CLASS}>
-                   <SectionTitle icon={Server} title="运营商信息" />
-                   <div className="space-y-1">
-                       <InfoItem label="运营商名称" value={data.company?.name || '未知'} highlight />
-                       <InfoItem label="域名" value={data.company?.domain || '-'} />
-                       <InfoItem label="类型" value={<IpTypeBadge type={data.company?.type} />} />
-                       <InfoItem label="网络范围" value={data.company?.network || '-'} />
-                       <div className="flex flex-col sm:flex-row justify-between py-2">
-                          <span className="text-slate-500 dark:text-slate-400 text-sm font-medium">滥用评分</span>
-                          <span className="mt-1 sm:mt-0">
-                            {data.company?.abuser_score ? (
-                                <span className={\`px-2 py-0.5 rounded text-xs font-bold \${getThreatColor(data.company.abuser_score)}\`}>
-                                    {data.company.abuser_score}
-                                </span>
-                            ) : '-'}
-                          </span>
-                       </div>
-                   </div>
-              </div>
-
-              {/* 5. ASN 信息 */}
-              <div className={DETAIL_PANEL_CLASS}>
-                   <SectionTitle icon={Activity} title="ASN 信息" />
-                   <div className="space-y-1">
-                       <InfoItem label="ASN 编号" value={data.asn?.asn ? \`AS\${data.asn.asn}\` : '未知'} highlight />
-                       <InfoItem label="组织" value={data.asn?.org || '-'} />
-                       <InfoItem label="路由" value={data.asn?.route || '-'} />
-                       <InfoItem label="类型" value={<IpTypeBadge type={data.asn?.type} />} />
-                       <InfoItem label="国家代码" value={data.asn?.country || '-'} />
-                       <div className="flex flex-col sm:flex-row justify-between py-2">
-                          <span className="text-slate-500 dark:text-slate-400 text-sm font-medium">滥用评分</span>
-                          <span className="mt-1 sm:mt-0">
-                            {data.asn?.abuser_score ? (
-                                <span className={\`px-2 py-0.5 rounded text-xs font-bold \${getThreatColor(data.asn.abuser_score)}\`}>
-                                    {data.asn.abuser_score}
-                                </span>
-                            ) : '-'}
-                          </span>
-                       </div>
-                   </div>
-              </div>
-
-              {/* 6. 滥用举报联系方式 */}
-              {data.abuse && (
-                  <div className={DETAIL_PANEL_MUTED_CLASS}>
-                      <SectionTitle icon={Shield} title="滥用举报联系方式" />
-                      <div className="space-y-1 text-sm">
-                          {data.abuse.name && <InfoItem label="联系人" value={data.abuse.name} />}
-                          {data.abuse.email && <InfoItem label="邮箱" value={data.abuse.email} />}
-                          {data.abuse.phone && <InfoItem label="电话" value={data.abuse.phone} />}
-                          {data.abuse.address && <InfoItem label="地址" value={data.abuse.address} />}
-                      </div>
+                  <div className="ip-detail-score-caption">
+                    <strong>{reputationLabel}</strong>
+                    <p>{trustScore === null ? '数据源未提供评分' : '评分来源：Net.Coffee'}</p>
                   </div>
-              )}
+                </div>
+              </div>
+              <div className="ip-detail-grid">
+                {detailSections.map((section) => (
+                  <DetailSection key={section.title} {...section} />
+                ))}
+              </div>
+            </>
+          );
+        } else {
+          content = (
+            <div className="ip-detail-state">
+              <div className="ip-detail-state-icon"><Info /></div>
+              <h3>暂无 IP 详情</h3>
+              <p>暂时没有可展示的信息，请重新获取。</p>
+              <button onClick={onRetry} className="ip-detail-retry">重新获取</button>
             </div>
           );
         }
 
         return (
-          <div className="fixed inset-0 z-50 overflow-y-auto" role="dialog" aria-modal="true" aria-label="IP 详细信息">
-            <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm transition-opacity" onClick={handleBackdropClick}></div>
-            <div className="flex min-h-full items-center justify-center p-4 text-center sm:p-0">
-              <div className="relative transform overflow-hidden rounded-2xl border border-white/70 bg-white/95 dark:border-white/10 dark:bg-slate-950/92 text-left shadow-2xl backdrop-blur-xl transition-all sm:my-8 sm:w-full sm:max-w-3xl max-h-[90vh] overflow-y-auto scrollbar-hide">
-                <div className="absolute top-4 right-4 z-10 md:hidden">
-                  <button type="button" aria-label="关闭" className="rounded-full bg-white/80 dark:bg-slate-900/80 p-2 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10 transition focus:outline-none" onClick={onClose}>
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-                <div className="p-6 sm:p-8 bg-[#f8fafc] dark:bg-[#07101d]">{content}</div>
+          <div className="ip-detail-overlay">
+            <div className="ip-detail-backdrop" onClick={handleBackdropClick} aria-hidden="true"></div>
+            <div className="ip-detail-panel" ref={panelRef} role="dialog" aria-modal="true" aria-labelledby="ip-detail-title">
+              <div className="ip-detail-toolbar">
+                <div className="ip-detail-toolbar-title"><Globe /><h2 id="ip-detail-title">IP 详细信息</h2></div>
+                <button ref={closeRef} onClick={onClose} className="ip-detail-close" aria-label="关闭详情"><X /></button>
+              </div>
+              <div className="ip-detail-body" tabIndex={0} aria-label="IP 详情内容" aria-busy={loading}>{content}</div>
+              <div className="ip-detail-footer">
+                <Info />
+                <span>{data && !loading && !error ? '数据来源：' + (data._source || '未知') + '。暂无数据表示该项没有检测结果。' : 'IP 哨兵 · 多源网络身份分析'}</span>
               </div>
             </div>
           </div>
@@ -2535,6 +3429,131 @@ function renderHtml(initData) {
         }
       };
 
+      // --- 客户端 IP 数据源（参考 one-ip 的多源回退）---
+      const IP_ECHO_TIMEOUT = 5000;
+
+      const requestJson = async (url, timeout = IP_ECHO_TIMEOUT) => {
+        const res = await fetchWithTimeout(url, { cache: 'no-store', credentials: 'omit' }, timeout);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return await res.json();
+      };
+
+      const requestText = async (url, timeout = IP_ECHO_TIMEOUT) => {
+        const res = await fetchWithTimeout(url, { cache: 'no-store', credentials: 'omit' }, timeout);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return (await res.text()).trim();
+      };
+
+      const canonicalizeIpAddress = (ip) => {
+        if (isValidIPv4Address(ip)) return normalizeTextValue(ip);
+        if (!isValidIPv6Address(ip)) return '';
+        try {
+          return new URL(\`http://[\${ip}]/\`).hostname.slice(1, -1);
+        } catch (e) {
+          return normalizeTextValue(ip).toLowerCase();
+        }
+      };
+
+      const isSameIpAddress = (left, right) => {
+        const leftValue = canonicalizeIpAddress(left);
+        return Boolean(leftValue) && leftValue === canonicalizeIpAddress(right);
+      };
+
+      const lookupGeoByIpwho = async (ip) => {
+        const data = await requestJson(\`https://ipwho.is/\${encodeURIComponent(ip)}\`);
+        if (data?.success !== true || !isSameIpAddress(data.ip, ip)) throw new Error('ipwho.is 未返回有效结果');
+        return {
+          ip,
+          isp: data.connection?.isp || data.connection?.org || '-',
+          countryCode: data.country_code,
+          countryName: data.country,
+        };
+      };
+
+      const lookupGeoByIpapi = async (ip) => {
+        const data = await requestJson(\`https://api.ipapi.is?q=\${encodeURIComponent(ip)}\`);
+        if (!isSameIpAddress(data?.ip, ip)) throw new Error('ipapi.is 未返回有效结果');
+        return {
+          ip,
+          isp: (typeof data.asn === 'string' ? data.asn : data.asn?.org) || data.company || '-',
+          countryCode: data.country_code || data.location?.country_code,
+          countryName: data.country || data.location?.country,
+        };
+      };
+
+      const lookupGeoByIpinfo = async (ip) => {
+        const data = await requestJson(\`https://ipinfo.io/\${encodeURIComponent(ip)}/json\`);
+        if (!isSameIpAddress(data?.ip, ip)) throw new Error('ipinfo.io 未返回有效结果');
+        return {
+          ip,
+          isp: data.org || '-',
+          countryCode: data.country,
+          countryName: data.country,
+        };
+      };
+
+      const geoLookupCache = new Map();
+
+      const fetchGeoByIp = async (ip) => {
+        if (geoLookupCache.has(ip)) return geoLookupCache.get(ip);
+
+        const sources = [lookupGeoByIpwho, lookupGeoByIpapi, lookupGeoByIpinfo];
+        for (const source of sources) {
+          try {
+            const result = await source(ip);
+            geoLookupCache.set(ip, result);
+            if (geoLookupCache.size > 30) {
+              geoLookupCache.delete(geoLookupCache.keys().next().value);
+            }
+            return result;
+          } catch (e) {
+            // 继续尝试下一个数据源
+          }
+        }
+        return { ip, isp: '-', countryCode: '', countryName: '未知位置' };
+      };
+
+      const readMyIpWtf = async (url) => (await requestJson(url)).YourFuckingIPAddress;
+
+      const IPV4_ECHO_SOURCES = [
+        { name: 'icanhazip', read: () => requestText('https://ipv4.icanhazip.com') },
+        { name: 'myip.wtf', read: () => readMyIpWtf('https://ipv4.myip.wtf/json') },
+        { name: 'ipify', read: async () => (await requestJson('https://api.ipify.org?format=json')).ip },
+      ];
+
+      const IPV6_ECHO_SOURCES = [
+        { name: 'myip.wtf', read: () => readMyIpWtf('https://ipv6.myip.wtf/json') },
+        { name: 'ident.me', read: () => requestText('https://v6.ident.me') },
+        { name: 'ipify', read: async () => (await requestJson('https://api6.ipify.org?format=json')).ip },
+        { name: 'icanhazip', read: () => requestText('https://ipv6.icanhazip.com') },
+      ];
+
+      const resolveEgressIp = async (version) => {
+        const sources = version === 6 ? IPV6_ECHO_SOURCES : IPV4_ECHO_SOURCES;
+        let sawCandidate = false;
+
+        for (const source of sources) {
+          try {
+            const candidate = normalizeTextValue(await source.read());
+            if (!candidate) continue;
+            sawCandidate = true;
+            const matchesVersion = version === 6 ? isValidIPv6Address(candidate) : isValidIPv4Address(candidate);
+            if (!matchesVersion) continue;
+            const geo = await fetchGeoByIp(candidate);
+            return buildSourceSuccessResult({
+              ip: candidate,
+              isp: geo.isp,
+              countryCode: geo.countryCode,
+              countryName: geo.countryName,
+            });
+          } catch (e) {
+            // 继续尝试下一个数据源
+          }
+        }
+
+        return createSourceErrorResult(sawCandidate ? \`未检测到 IPv\${version} 出口\` : '加载失败');
+      };
+
       // --- 数据服务层 (客户端直接请求) ---
       const ipService = {
         measureConnectivity: async () => {
@@ -2549,71 +3568,87 @@ function renderHtml(initData) {
         fetchXcom: createTraceFetcher('https://help.x.com/cdn-cgi/trace'),
         fetchOpenAI: createTraceFetcher('https://openai.com/cdn-cgi/trace'),
         fetchGrok: createTraceFetcher('https://grok.com/cdn-cgi/trace'),
-        // IPv4
-        fetchIpSbV4: async () => {
-          try {
-            const res = await fetchWithTimeout('https://api-ipv4.ip.sb/geoip');
-            if (!res.ok) throw new Error('Error');
-            const data = await res.json();
-            return buildSourceSuccessResult({ ip: data.ip, isp: data.isp, countryCode: data.country_code, countryName: data.country });
-          } catch (e) { return createSourceErrorResult('加载失败'); }
-        },
-        // IPv6
-        fetchIpSbV6: async () => {
-          try {
-            const res = await fetchWithTimeout('https://api-ipv6.ip.sb/geoip');
-            if (!res.ok) throw new Error('Error');
-            const data = await res.json();
-            return buildSourceSuccessResult({ ip: data.ip, isp: data.isp, countryCode: data.country_code, countryName: data.country });
-          } catch (e) { return createSourceErrorResult('加载失败'); }
-        },
-        // IP 基础信息查询 (优先使用 ipinfo.io，失败后回退 IPAPI.is)
+        // IPv4 / IPv6 出口（ip.sb 已不可用，改用多源回退）
+        fetchIpv4: () => resolveEgressIp(4),
+        fetchIpv6: () => resolveEgressIp(6),
+        // 当前 IP 基础信息（ipwho.is 主源，ipapi.is / ipinfo.io 回退）
         fetchIpApi: async () => {
-          try {
-            const res = await fetchWithTimeout(\`https://api.cmliussss.net/api/ipinfo?_t=\${Date.now()}\`);
-            if (!res.ok) throw new Error('Error');
-            const data = await res.json();
-            const result = buildSourceSuccessResult({
-              ip: data.ip,
-              isp: data.org || data.asn?.org || data.isp,
-              countryCode: data.country_code || data.country || data.location?.country_code,
-              countryName: data.country_name || data.location?.country || data.city || data.region,
-            });
-            return {
-              ...result,
-              sourceName: 'ipinfo.io',
-              sourceUrl: 'https://ipinfo.io/',
-            };
-          } catch (e) {
+          const sources = [
+            {
+              name: 'ipwho.is',
+              url: 'https://ipwho.is',
+              load: async () => {
+                const data = await requestJson('https://ipwho.is/');
+                if (data?.success !== true || !isValidIpAddress(data.ip)) throw new Error('invalid');
+                return {
+                  ip: data.ip,
+                  isp: data.connection?.isp || data.connection?.org,
+                  countryCode: data.country_code,
+                  countryName: data.country,
+                };
+              },
+            },
+            {
+              name: 'IPAPI.is',
+              url: 'https://ipapi.is',
+              load: async () => {
+                const data = await requestJson('https://api.ipapi.is/');
+                if (!isValidIpAddress(data?.ip)) throw new Error('invalid');
+                return {
+                  ip: data.ip,
+                  isp: (typeof data.asn === 'string' ? data.asn : data.asn?.org) || data.company,
+                  countryCode: data.country_code,
+                  countryName: data.country,
+                };
+              },
+            },
+            {
+              name: 'ipinfo.io',
+              url: 'https://ipinfo.io',
+              load: async () => {
+                const data = await requestJson('https://ipinfo.io/json');
+                if (!isValidIpAddress(data?.ip)) throw new Error('invalid');
+                return {
+                  ip: data.ip,
+                  isp: data.org,
+                  countryCode: data.country,
+                  countryName: data.country,
+                };
+              },
+            },
+          ];
+
+          for (const source of sources) {
             try {
-              const res = await fetchWithTimeout('https://api.ipapi.is/', {}, 5000);
-              if (!res.ok) throw new Error('Error');
-              const data = await res.json();
-              const result = buildSourceSuccessResult({
-                ip: data.ip,
-                isp: data.asn?.org,
-                countryCode: data.location?.country_code,
-                countryName: data.location?.country,
-              });
+              const result = await source.load();
               return {
-                ...result,
-                sourceName: 'IPAPI.is',
-                sourceUrl: 'https://ipapi.is',
+                ...buildSourceSuccessResult(result),
+                sourceName: source.name,
+                sourceUrl: source.url,
               };
-            } catch (e2) { return createSourceErrorResult('加载失败'); }
+            } catch (e) {
+              // 继续尝试下一个数据源
+            }
           }
+
+          return createSourceErrorResult('加载失败');
         },
-        // 详情查询 (使用 Worker 中转)
+        // 详情查询 (使用 Worker 中转，后端多源回退)
         fetchIpDetails: async (ip) => {
           if (!isQueryableTarget(ip)) throw new Error('详情查询目标无效');
           const res = await fetchWithTimeout(\`/api/ipapi?q=\${encodeURIComponent(ip)}\`);
           if (!res.ok) throw new Error('详情查询失败');
           return await res.json();
         },
+        // WebRTC 区域信息（ipwho.is 主源）
         fetchWebRTCRegion: async (ip) => {
-          const res = await fetchWithTimeout(\`https://api.ip.sb/geoip/\${encodeURIComponent(ip)}\`);
-          if (!res.ok) throw new Error('区域查询失败');
-          return await res.json();
+          const geo = await fetchGeoByIp(ip);
+          return {
+            country_code: geo.countryCode,
+            country: geo.countryName,
+            organization: geo.isp,
+            isp: geo.isp,
+          };
         },
 
         // --- WebRTC IP 检测 ---
@@ -2649,8 +3684,8 @@ function renderHtml(initData) {
 
       // id → 请求函数映射（用于 loadData 和 onRetry 共用）
       const FETCH_MAP = {
-        ipv4: () => ipService.fetchIpSbV4(),
-        ipv6: () => ipService.fetchIpSbV6(),
+        ipv4: () => ipService.fetchIpv4(),
+        ipv6: () => ipService.fetchIpv6(),
         ipapi: () => ipService.fetchIpApi(),
         chatgpt: () => ipService.fetchChatGPT(),
         xcom: () => ipService.fetchXcom(),
@@ -2660,9 +3695,9 @@ function renderHtml(initData) {
 
       // 数据源卡片配置（配置驱动，消除重复模板代码）
       const SOURCE_CONFIGS = [
-        { id: 'ipv4', sourceName: 'IP.SB IPv4', sourceUrl: 'https://ip.sb', sourceIcon: ICONS.ipsb, isp: '...' },
-        { id: 'ipv6', sourceName: 'IP.SB IPv6', sourceUrl: 'https://ip.sb', sourceIcon: ICONS.ipsb, isp: '...' },
-        { id: 'ipapi', sourceName: 'IPAPI.is', sourceUrl: 'https://ipapi.is', sourceIcon: ICONS.ipapi, isp: '...' },
+        { id: 'ipv4', sourceName: 'IPv4 出口', sourceUrl: 'https://ipwho.is', sourceIcon: ICONS.ipsb, isp: '...' },
+        { id: 'ipv6', sourceName: 'IPv6 出口', sourceUrl: 'https://ipwho.is', sourceIcon: ICONS.ipsb, isp: '...' },
+        { id: 'ipapi', sourceName: 'ipwho.is', sourceUrl: 'https://ipwho.is', sourceIcon: ICONS.ipapi, isp: '...' },
         { id: 'chatgpt', sourceName: 'chatgpt.com', sourceUrl: 'https://chatgpt.com', sourceIcon: ICONS.chatgpt },
 				{ id: 'openai', sourceName: 'openai.com', sourceUrl: 'https://openai.com', sourceIcon: ICONS.openai },
         { id: 'xcom', sourceName: 'X.com', sourceUrl: 'https://x.com', sourceIcon: ICONS.xcom },
@@ -2695,6 +3730,7 @@ function renderHtml(initData) {
         const [detailLoading, setDetailLoading] = useState(false);
         const [detailError, setDetailError] = useState(null);
         const [stylePreset, setStylePreset] = useState(() => normalizeStylePreset(document.documentElement.dataset.style || localStorage.getItem('style-preset')));
+        const handleCloseModal = useCallback(() => setModalOpen(false), []);
 
         const updateRow = useCallback((id, data) => {
           setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...data, isLoading: false } : row)));
@@ -2785,14 +3821,16 @@ function renderHtml(initData) {
                         <Globe className="w-4 h-4" />
                         <span>基于 Cloudflare & React 构建</span>
                     </div>
-                    <div>数据源包括 ipapi.is, ip.sb 等。</div>
+                    <div>数据源包括 ipwho.is, ipapi.is, ip-api.com 等。</div>
                 </div>
               </div>
             </main>
 
             <IpDetailModal
               isOpen={modalOpen}
-              onClose={() => setModalOpen(false)}
+              onClose={handleCloseModal}
+              onRetry={() => handleViewDetails(selectedIp)}
+              selectedIp={selectedIp}
               data={detailData}
               loading={detailLoading}
               error={detailError}

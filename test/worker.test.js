@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { runInNewContext } from 'node:vm';
 
 import worker, {
   deriveWebRTCStatus,
   normalizeCountryCode,
   parseTraceResponse,
+  resetRuntimeCaches,
   validateQueryTarget,
 } from '../src/_worker.js';
 
@@ -13,15 +15,17 @@ async function runRequest(request) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  resetRuntimeCaches();
 });
 
 describe('worker API hardening', () => {
   it('propagates upstream non-2xx status for /api/ipapi', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ error: 'upstream limited' }), {
-        status: 429,
-        headers: { 'content-type': 'application/json' },
-      })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ error: 'upstream limited' }), {
+          status: 429,
+          headers: { 'content-type': 'application/json' },
+        })
     );
 
     const response = await runRequest(new Request('https://example.com/api/ipapi?q=1.1.1.1'));
@@ -44,11 +48,12 @@ describe('worker API hardening', () => {
   });
 
   it('falls back CORS allow-origin to self origin for cross-origin calls', async () => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ ip: '1.1.1.1' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ ip: '1.1.1.1' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
     );
 
     const response = await runRequest(
@@ -102,11 +107,12 @@ describe('worker API hardening', () => {
 
   it('accepts expanded IPv6 query targets', async () => {
     const target = '2001:0db8:0000:0000:0000:ff00:0042:8329';
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ ip: target }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ ip: target }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
     );
 
     const response = await runRequest(new Request(`https://example.com/api/ipapi?q=${encodeURIComponent(target)}`));
@@ -124,11 +130,12 @@ describe('worker API hardening', () => {
 
   it('accepts compressed IPv6 targets with embedded IPv4 suffixes', async () => {
     const target = '2001:db8::192.0.2.33';
-    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ ip: target }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ ip: target }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
     );
 
     const response = await runRequest(new Request(`https://example.com/api/ipapi?q=${encodeURIComponent(target)}`));
@@ -142,6 +149,417 @@ describe('worker API hardening', () => {
         headers: { Accept: 'application/json' },
       })
     );
+  });
+});
+
+describe('IP lookup fallback', () => {
+  it('falls back to ipwho.is when ipapi.is is unavailable', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.startsWith('https://api.ipapi.is')) {
+        return new Response(JSON.stringify({ error: 'down' }), {
+          status: 503,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+
+      if (url.startsWith('https://ipwho.is/')) {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            ip: '1.1.1.1',
+            country: 'Australia',
+            country_code: 'AU',
+            region: 'Queensland',
+            city: 'Brisbane',
+            postal: '4001',
+            latitude: -27.4,
+            longitude: 153.0,
+            is_eu: false,
+            connection: { asn: 13335, org: 'APNIC Research', isp: 'Cloudflare', domain: 'cloudflare.com' },
+            timezone: { id: 'Australia/Brisbane' },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      if (url.startsWith('http://ip-api.com/')) {
+        return new Response(
+          JSON.stringify({
+            status: 'success',
+            query: '1.1.1.1',
+            country: 'Australia',
+            countryCode: 'AU',
+            regionName: 'Queensland',
+            city: 'Brisbane',
+            lat: -27.4,
+            lon: 153.0,
+            timezone: 'Australia/Brisbane',
+            isp: 'Cloudflare',
+            org: 'APNIC Research',
+            as: 'AS13335 Cloudflare, Inc.',
+            asname: 'CLOUDFLARENET',
+            mobile: false,
+            proxy: true,
+            hosting: false,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      return new Response('{}', { status: 404 });
+    });
+
+    const response = await runRequest(new Request('https://example.com/api/ipapi?q=1.1.1.1'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.ip).toBe('1.1.1.1');
+    expect(body._source).toBe('ipwho.is + ip-api.com');
+    expect(body.location.country_code).toBe('AU');
+    expect(body.company.name).toBe('APNIC Research');
+    expect(body.asn.asn).toBe('13335');
+    expect(body.is_proxy).toBe(true);
+    expect(body.is_datacenter).toBe(false);
+  });
+
+  it('falls back to ip-api.com when ipapi.is and ipwho.is both fail', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.startsWith('http://ip-api.com/')) {
+        return new Response(
+          JSON.stringify({
+            status: 'success',
+            query: '8.8.8.8',
+            country: 'United States',
+            countryCode: 'US',
+            regionName: 'California',
+            city: 'Mountain View',
+            lat: 37.4,
+            lon: -122.1,
+            timezone: 'America/Los_Angeles',
+            isp: 'Google LLC',
+            org: 'Google Public DNS',
+            as: 'AS15169 Google LLC',
+            asname: 'GOOGLE',
+            mobile: false,
+            proxy: false,
+            hosting: true,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      return new Response(JSON.stringify({ error: 'down' }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+
+    const response = await runRequest(new Request('https://example.com/api/ipapi?q=8.8.8.8'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body._source).toBe('ip-api.com');
+    expect(body.ip).toBe('8.8.8.8');
+    expect(body.company.type).toBe('hosting');
+    expect(body.is_datacenter).toBe(true);
+  });
+
+  it('uses the Net.Coffee trust score and risk flags as the reference source', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.startsWith('https://ip.net.coffee/api/ip/lookup/')) {
+        return new Response(
+          JSON.stringify({
+            ip: '8.8.8.8',
+            trust_score: 63,
+            company_name: 'Google LLC',
+            isp: 'Google',
+            company_type: 'hosting',
+            asn: 15169,
+            asname: 'GOOGLE',
+            asOrganization: 'Google LLC',
+            asn_kind: 'hosting',
+            country: 'United States',
+            countryCode: 'us',
+            registered_country: 'United States',
+            registered_country_code: 'us',
+            cidr: '8.8.8.0/24',
+            range: { first: '8.8.8.0', last: '8.8.8.255', count: 256 },
+            rdns: 'dns.google',
+            reddit_blocked: false,
+            rpki_status: 'valid',
+            asn_ipv4_count: 4078592,
+            asn_allocated: '2000-03-30',
+            asn_tbps: '100+Tbps',
+            abuser_score: '',
+            intelligence: { abuser_score_raw: '' },
+            is_mobile: false,
+            is_datacenter: true,
+            is_crawler: false,
+            is_proxy: false,
+            is_vpn: false,
+            is_tor: false,
+            is_abuser: false,
+            is_bogon: false,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      if (url.startsWith('http://ip-api.com/')) {
+        return new Response(
+          JSON.stringify({
+            status: 'success',
+            query: '8.8.8.8',
+            country: 'United States',
+            countryCode: 'US',
+            regionName: 'California',
+            city: 'Mountain View',
+            lat: 37.4,
+            lon: -122.1,
+            timezone: 'America/Los_Angeles',
+            isp: 'Google LLC',
+            org: 'Google Public DNS',
+            as: 'AS15169 Google LLC',
+            asname: 'GOOGLE',
+            mobile: false,
+            proxy: true,
+            hosting: true,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      return new Response(JSON.stringify({ error: 'down' }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+
+    const response = await runRequest(new Request('https://example.com/api/ipapi?q=8.8.8.8'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body._source).toContain('Net.Coffee');
+    expect(body.trust_score).toBe(63);
+    expect(body.company.name).toBe('Google LLC');
+    expect(body.company.isp).toBe('Google');
+    expect(body.asn.name).toBe('GOOGLE');
+    expect(body.asn.org).toBe('Google LLC');
+    expect(body.asn_ipv4_count).toBe(4078592);
+    expect(body.rpki_status).toBe('valid');
+    expect(body.reddit_blocked).toBe(false);
+    expect(body.ptr).toBe('dns.google');
+    expect(body.is_proxy).toBe(false);
+    expect(body.range).toEqual({ first: '8.8.8.0', last: '8.8.8.255', count: 256 });
+  });
+
+  it('merges RDAP RIR, network and abuse contact into the detail', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.startsWith('https://rdap.arin.net/registry/ip/')) {
+        return new Response(
+          JSON.stringify({
+            handle: 'NET-8-8-8-0-2',
+            name: 'GOGL',
+            startAddress: '8.8.8.0',
+            endAddress: '8.8.8.255',
+            cidr0_cidrs: [{ v4prefix: '8.8.8.0', length: 24 }],
+            country: 'US',
+            entities: [
+              {
+                handle: 'GOGL',
+                roles: ['registrant'],
+                vcardArray: ['vcard', [['fn', {}, 'text', 'Google LLC']]],
+                entities: [
+                  {
+                    handle: 'ABUSE5250-ARIN',
+                    roles: ['abuse'],
+                    vcardArray: [
+                      'vcard',
+                      [
+                        ['fn', {}, 'text', 'Abuse'],
+                        ['email', {}, 'text', 'network-abuse@google.com'],
+                        ['tel', {}, 'text', '+1-650-253-0000'],
+                        [
+                          'adr',
+                          { label: '1600 Amphitheatre Parkway\nMountain View\nCA\n94043\nUnited States' },
+                          'text',
+                          ['', '', '', '', '', '', ''],
+                        ],
+                      ],
+                    ],
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/rdap+json' } }
+        );
+      }
+
+      if (url.startsWith('https://cloudflare-dns.com/dns-query')) {
+        return new Response(
+          JSON.stringify({ Status: 0, Answer: [{ name: '8.8.8.8.in-addr.arpa', type: 12, data: 'dns.google.' }] }),
+          { status: 200, headers: { 'content-type': 'application/dns-json' } }
+        );
+      }
+
+      if (url.startsWith('http://ip-api.com/')) {
+        return new Response(
+          JSON.stringify({
+            status: 'success',
+            query: '8.8.8.8',
+            country: 'United States',
+            countryCode: 'US',
+            regionName: 'California',
+            city: 'Mountain View',
+            lat: 37.4,
+            lon: -122.1,
+            timezone: 'America/Los_Angeles',
+            isp: 'Google LLC',
+            org: 'Google Public DNS',
+            as: 'AS15169 Google LLC',
+            asname: 'GOOGLE',
+            mobile: false,
+            proxy: false,
+            hosting: true,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      return new Response(JSON.stringify({ error: 'down' }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+
+    const response = await runRequest(new Request('https://example.com/api/ipapi?q=8.8.8.8'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.rir).toBe('ARIN');
+    expect(body.company.network).toBe('8.8.8.0/24');
+    expect(body.asn.route).toBe('8.8.8.0/24');
+    expect(body.abuse).toEqual({
+      name: 'Abuse',
+      email: 'network-abuse@google.com',
+      phone: '+1-650-253-0000',
+      address: '1600 Amphitheatre Parkway, Mountain View, CA, 94043, United States',
+    });
+    expect(body._source).toContain('RDAP');
+    expect(body.asn.name).toBe('GOOGLE');
+    expect(body.asn.org).toBe('Google Public DNS');
+    expect(body.registered_country_code).toBe('US');
+    expect(body.range).toEqual({ first: '8.8.8.0', last: '8.8.8.255', count: 256 });
+    expect(body.ptr).toBe('dns.google');
+  });
+
+  it('adds StopForumSpam abuse reports and Tor exit membership', async () => {
+    resetRuntimeCaches();
+
+    const torList = [
+      '9.9.9.9',
+      ...Array.from({ length: 200 }, (_, index) => `10.0.${Math.floor(index / 256)}.${index % 256}`),
+    ].join('\n');
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+
+      if (url.startsWith('https://www.stopforumspam.com/api')) {
+        return new Response(
+          JSON.stringify({ success: 1, ip: { value: '9.9.9.9', frequency: 42, appears: 1 } }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      if (url.startsWith('https://check.torproject.org/torbulkexitlist')) {
+        return new Response(torList, { status: 200, headers: { 'content-type': 'text/plain' } });
+      }
+
+      if (url.startsWith('http://ip-api.com/')) {
+        return new Response(
+          JSON.stringify({
+            status: 'success',
+            query: '9.9.9.9',
+            country: 'United States',
+            countryCode: 'US',
+            regionName: 'California',
+            city: 'Los Angeles',
+            lat: 34,
+            lon: -118,
+            timezone: 'America/Los_Angeles',
+            isp: 'Quad9',
+            org: 'Quad9',
+            as: 'AS19281 Quad9',
+            asname: 'QUAD9',
+            mobile: false,
+            proxy: false,
+            hosting: false,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+
+      return new Response(JSON.stringify({ error: 'down' }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+
+    const response = await runRequest(new Request('https://example.com/api/ipapi?q=9.9.9.9'));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.is_abuser).toBe(true);
+    expect(body.is_tor).toBe(true);
+    expect(body.abuse.reports).toBe(42);
+    expect(body._source).toBe('ip-api.com');
+  });
+
+  it('rejects a missing query target', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const response = await runRequest(new Request('https://example.com/api/ipapi'));
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body.error).toBe('缺少查询目标');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('reuses the Tor list within an hour and refreshes membership after expiry', async () => {
+    let now = 1000;
+    vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const filler = Array.from({ length: 100 }, (_, index) => `10.0.0.${index}`).join('\n');
+    let torRequests = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.startsWith('https://check.torproject.org/torbulkexitlist')) {
+        torRequests += 1;
+        return new Response(filler + (torRequests === 1 ? '\n9.9.9.9' : ''));
+      }
+      if (url.startsWith('http://ip-api.com/')) {
+        return new Response(JSON.stringify({ status: 'success', query: '9.9.9.9' }));
+      }
+      return new Response('{}', { status: 503 });
+    });
+    const query = async () => (await runRequest(new Request('https://example.com/api/ipapi?q=9.9.9.9'))).json();
+
+    expect((await query()).is_tor).toBe(true);
+    now += 3600000 - 1;
+    expect((await query()).is_tor).toBe(true);
+    expect(torRequests).toBe(1);
+    now += 1;
+    const refreshed = await Promise.all([query(), query()]);
+    expect(refreshed.map((detail) => detail.is_tor)).toEqual([false, false]);
+    expect(torRequests).toBe(2);
   });
 });
 
@@ -211,6 +629,34 @@ describe('helper logic', () => {
 });
 
 describe('rendered client script', () => {
+  it.each([
+    ['2001:0db8:0000:0000:0000:ff00:0042:8329', '2001:db8::ff00:42:8329', 63],
+    ['2001:db8::ff00:42:8329', '2001:0db8:0000:0000:0000:ff00:0042:8329', 63],
+    ['2001:db8::192.0.2.33', '2001:db8::c000:221', 63],
+    ['2001:db8::1', '2001:db8::2', null],
+  ])('only accepts a fallback score for the same IPv6 address (%s / %s)', async (ip, returnedIp, expectedScore) => {
+    const html = await (await runRequest(new Request('https://example.com/'))).text();
+    const sharedScript = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+    const addressHelpers = html.slice(html.indexOf('const canonicalizeIpAddress ='), html.indexOf('const lookupGeoByIpwho'));
+    const fallbackEffect = html.match(/\/\/ Worker 端请求[\s\S]*?(useEffect\(\(\) => \{[\s\S]*?\}, \[isOpen, data\?\.ip, data\?\.trust_score\]\);)/)[1];
+    const setScore = vi.fn();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ ip: returnedIp, trust_score: 63 }))
+    );
+    let cleanup;
+    runInNewContext(sharedScript + addressHelpers + fallbackEffect, {
+      window: {}, tailwind: {}, URL, AbortController, fetch: fetchSpy,
+      isOpen: true, data: { ip, trust_score: null }, setClientTrustScore: setScore,
+      useEffect: (effect) => { cleanup = effect(); },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    if (expectedScore === null) expect(setScore).not.toHaveBeenCalled();
+    else expect(setScore).toHaveBeenCalledWith(expectedScore);
+    cleanup();
+  });
+
   it('pins Babel standalone to a stable major version', async () => {
     const response = await runRequest(new Request('https://example.com/'));
     const html = await response.text();
@@ -225,17 +671,19 @@ describe('rendered client script', () => {
     expect(html).toContain('/api/ipapi?q=${encodeURIComponent(ip)}');
   });
 
-  it('falls back from ipapi.is to the cmliussss ipinfo proxy and relabels the card', async () => {
+  it('uses ipwho.is as the primary IP source and removes the retired proxies', async () => {
     const response = await runRequest(new Request('https://example.com/'));
     const html = await response.text();
 
-    expect(html).toContain('https://api.ipapi.is/');
-    expect(html).toContain('https://api.cmliussss.net/api/ipinfo?_t=${Date.now()}');
-    expect(html).not.toContain('https://api.ipapi.cmliussss.net/');
-    expect(html).toContain("sourceName: 'ipinfo.io'");
-    expect(html).toContain("sourceUrl: 'https://ipinfo.io/'");
-    expect(html).toContain('countryCode: data.country_code || data.country || data.location?.country_code');
-    expect(html).toContain('countryName: data.country_name || data.location?.country || data.city || data.region');
+    expect(html).toContain('https://ipwho.is/');
+    expect(html).toContain("sourceName: 'ipwho.is'");
+    expect(html).toContain('https://ipv4.icanhazip.com');
+    expect(html).toContain('https://ipv6.myip.wtf/json');
+    expect(html).toContain('https://v6.ident.me');
+    expect(html).not.toContain('api.cmliussss.net');
+    expect(html).not.toContain('api-ipv4.ip.sb');
+    expect(html).not.toContain('api-ipv6.ip.sb');
+    expect(html).not.toContain('api.ip.sb/geoip');
   });
 
   it('ships the new client-side guardrails and helper functions', async () => {
