@@ -1181,6 +1181,7 @@ function renderHtml(initData) {
       .app-shell {
         position: relative;
         isolation: isolate;
+        overflow-x: clip;
       }
       .app-shell:before {
         content: '';
@@ -1831,6 +1832,7 @@ function renderHtml(initData) {
         inset: 0;
         z-index: 50;
         display: grid;
+        grid-template-columns: minmax(0, 1fr);
         place-items: center;
         padding: 24px;
         color: var(--detail-ink);
@@ -1850,6 +1852,8 @@ function renderHtml(initData) {
         display: flex;
         flex-direction: column;
         width: min(100%, 960px);
+        min-width: 0;
+        max-width: 100%;
         max-height: min(90vh, 1040px);
         max-height: min(90dvh, 1040px);
         min-height: 0;
@@ -1935,7 +1939,7 @@ function renderHtml(initData) {
       .ip-detail-badge-risk { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
       html.dark .ip-detail-badge-clear { color: #86efac; background: #122b24; border-color: #285444; }
       html.dark .ip-detail-badge-risk { color: #fca5a5; background: #321d27; border-color: #64303c; }
-      .ip-detail-footer { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 14px 24px; border-top: 1px solid var(--detail-line); color: var(--detail-muted); font-size: 12px; line-height: 1.8; }
+      .ip-detail-footer { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 14px 24px; border-top: 1px solid var(--detail-line); color: var(--detail-muted); font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
       .ip-detail-footer > svg { width: 15px; height: 15px; flex-shrink: 0; }
       .ip-detail-state { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 320px; padding: 40px 24px; text-align: center; }
       .ip-detail-state-icon { display: grid; place-items: center; width: 64px; height: 64px; margin-bottom: 20px; border: 1px solid var(--detail-line); border-radius: 12px; background: var(--detail-wash); color: var(--detail-muted); }
